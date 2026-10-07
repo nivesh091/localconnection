@@ -58,7 +58,8 @@ export const Header: React.FC<HeaderProps> = ({
           <div className="inline-flex items-center justify-center min-w-0 max-w-[190px] xs:max-w-[230px] sm:max-w-sm">
             <span
               title={greeting}
-              className="text-base font-semibold text-slate-800 tracking-tight truncate text-center"
+              style={{ fontSize: '19px' }}
+              className="text-[19px] font-semibold text-slate-800 tracking-tight truncate text-center"
             >
               {greeting}
             </span>
@@ -70,9 +71,7 @@ export const Header: React.FC<HeaderProps> = ({
                 style={{
                   width: '18px',
                   height: '18px',
-                  verticalAlign: 'middle',
                   marginLeft: '2px',
-                  marginTop: '0px',
                 }}
               />
             )}

@@ -279,23 +279,33 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
               <div className="max-w-full text-center pointer-events-auto">
                 <h2
                   style={nameStyle}
-                  className="font-bold text-[#222b31] tracking-tight break-words inline leading-tight"
+                  className="font-bold text-[#222b31] tracking-tight inline-flex items-center justify-center max-w-full leading-tight"
                 >
-                  <span>{name}</span>
+                  <span
+                    className="truncate"
+                    style={{
+                      fontSize: '19.88px',
+                      paddingLeft: '0px',
+                      marginLeft: '0px',
+                      paddingTop: '0px',
+                      marginTop: '0px',
+                    }}
+                  >
+                    {name}
+                  </span>
                   {/* Provided Verification Logo Image */}
                   {!isNormalUser && (
                     <img
                       src={verificationLogo}
                       alt="Verified"
-                      className="inline-block shrink-0 object-contain select-none"
+                      className="shrink-0 object-contain select-none"
                       style={{
-                        width: '0.88em',
-                        height: '0.88em',
+                        width: '15.9884px',
+                        height: '15.9884px',
                         minWidth: '15px',
                         minHeight: '15px',
                         maxWidth: '24px',
                         maxHeight: '24px',
-                        verticalAlign: '-0.08em',
                         marginLeft: '2px',
                       }}
                     />
@@ -314,7 +324,12 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                 <div className="mt-1 sm:mt-1.5 flex justify-center max-w-full pointer-events-auto">
                   <span
                     className="inline-flex items-center justify-center border border-[#bca071] bg-[#f2c7d6] text-[#2d3748] rounded-full px-[15px] pt-[3px] pb-[6px] ml-0 mt-0 text-[18px] font-semibold tracking-tight leading-none text-center max-w-full break-words shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
-                    style={{ marginLeft: '0px' }}
+                    style={{
+                      marginLeft: '0px',
+                      paddingRight: '10px',
+                      marginTop: '-3px',
+                      marginBottom: '-10px',
+                    }}
                   >
                     {categoryName}
                   </span>

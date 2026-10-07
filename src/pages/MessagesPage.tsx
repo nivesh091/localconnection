@@ -42,9 +42,23 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   const { t, lang } = useTranslation();
   const { websiteName } = useWebsiteBranding();
 
-  const [conversations, setConversations] = useState<Conversation[]>([]);
+  const [conversations, setConversations] = useState<Conversation[]>(() => {
+    try {
+      if (user?.id) {
+        const raw = safeStorage.getItem(`km_conversations_${user.id}`);
+        if (raw) return JSON.parse(raw);
+      }
+    } catch {}
+    return [];
+  });
   const [workerUserIdSet, setWorkerUserIdSet] = useState<Set<string>>(new Set());
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    if (user?.id) {
+      const raw = safeStorage.getItem(`km_conversations_${user.id}`);
+      if (raw) return false;
+    }
+    return true;
+  });
   const [activeMenuId, setActiveMenuId] = useState<string | null>(null);
 
   // Search state
@@ -558,24 +572,26 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                 <div className="flex-1 min-w-0">
                   <div style={{ fontSize: '16px' }} className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                      <h4 style={{ fontSize: isAdm ? '17px' : '18px' }} className="font-bold text-slate-900 truncate tracking-tight">{name}</h4>
+                      <div className="inline-flex items-center min-w-0">
+                        <h4 style={{ fontSize: isAdm ? '17px' : '18px' }} className="font-bold text-slate-900 truncate tracking-tight">{name}</h4>
+                        {isWorker && (
+                          <img
+                            src={verificationLogo}
+                            alt="Verified"
+                            className="inline-block shrink-0 object-contain select-none"
+                            style={{
+                              width: '16px',
+                              height: '16px',
+                              marginLeft: '2px',
+                            }}
+                          />
+                        )}
+                      </div>
                       {isAdm && (
                         <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-extrabold text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-full whitespace-nowrap shadow-2xs">
                           <Pin className="w-2.5 h-2.5 rotate-45 text-amber-700" />
                           <span>{lang === 'hi' ? 'एडमिन (पिन)' : 'Admin (Pinned)'}</span>
                         </span>
-                      )}
-                      {isWorker && (
-                        <img
-                          src={verificationLogo}
-                          alt="Verified"
-                          className="inline-block ml-0.5 shrink-0 object-contain select-none"
-                          style={{
-                            width: '16px',
-                            height: '16px',
-                            verticalAlign: 'middle',
-                          }}
-                        />
                       )}
                       {other?.is_worker_active === false && (
                         <span className="shrink-0 text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-300 px-1.5 py-0.5 rounded-full whitespace-nowrap">

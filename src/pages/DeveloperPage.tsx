@@ -12,9 +12,16 @@ export const DeveloperPage: React.FC<DeveloperPageProps> = ({ onBack }) => {
       <button
         type="button"
         onClick={onBack}
-        className="inline-flex items-center gap-2 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200/90 px-3 py-1.5 rounded-xl shadow-xs transition active:scale-95 cursor-pointer mb-4"
+        style={{
+          paddingTop: '16px',
+          paddingBottom: '16px',
+          backgroundColor: '#fdcdc5',
+          borderColor: '#000000',
+          color: '#000000',
+        }}
+        className="inline-flex items-center gap-2 text-xs font-semibold border px-3 rounded-xl shadow-xs transition active:scale-95 cursor-pointer mb-4"
       >
-        <ArrowLeft className="w-4 h-4 text-teal-700" />
+        <ArrowLeft className="w-4 h-4" />
         <span style={{ fontSize: '14px' }}>मुख्य पृष्ठ पर वापस (Back to Home)</span>
       </button>
 

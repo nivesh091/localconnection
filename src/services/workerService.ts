@@ -115,20 +115,130 @@ const workerDetailCache = new Map<string, { data: WorkerProfile; timestamp: numb
 const workerDetailInFlight = new Map<string, Promise<WorkerProfile | null>>();
 const WORKER_DETAIL_TTL = 60000;
 
+// In-memory cache for fast worker validation lookups
+const verifiedWorkerCache = new Map<string, boolean>();
+
 export class WorkerService {
   static invalidateCache(userId?: string): void {
     if (userId) {
       workerDetailCache.delete(userId);
       workerDetailInFlight.delete(userId);
+      verifiedWorkerCache.delete(userId);
     } else {
       workerDetailCache.clear();
       workerDetailInFlight.clear();
+      verifiedWorkerCache.clear();
     }
     workersCache.clear();
     workersInFlight.clear();
     try {
       mapCacheInvalidator?.();
     } catch {}
+  }
+
+  /**
+   * Synchronously returns any cached verified worker user IDs from memory or offline storage
+   */
+  static getCachedWorkerUserIds(userIds: string[]): Set<string> {
+    const verified = new Set<string>();
+    for (const id of userIds) {
+      if (!id) continue;
+      if (verifiedWorkerCache.get(id) === true) {
+        verified.add(id);
+      } else if (workerDetailCache.has(id)) {
+        const w = workerDetailCache.get(id)?.data;
+        if (w && w.is_active !== false) {
+          verifiedWorkerCache.set(id, true);
+          verified.add(id);
+        }
+      } else {
+        const offline = OfflineWorkerStorage.getWorkerDetail(id);
+        if (offline && offline.is_active !== false) {
+          verifiedWorkerCache.set(id, true);
+          verified.add(id);
+        }
+      }
+    }
+    return verified;
+  }
+
+  /**
+   * Batch check which user IDs have a valid Worker ID / Service Provider ID in worker_profiles
+   */
+  static async getValidWorkerUserIds(userIds: string[]): Promise<Set<string>> {
+    const verified = new Set<string>();
+    const missing: string[] = [];
+
+    for (const id of userIds) {
+      if (!id) continue;
+      const cached = verifiedWorkerCache.get(id);
+      if (cached === true) {
+        verified.add(id);
+      } else if (cached === false) {
+        // known non-worker
+      } else if (workerDetailCache.has(id)) {
+        const w = workerDetailCache.get(id)?.data;
+        if (w && w.is_active !== false) {
+          verifiedWorkerCache.set(id, true);
+          verified.add(id);
+        } else {
+          verifiedWorkerCache.set(id, false);
+        }
+      } else {
+        const offline = OfflineWorkerStorage.getWorkerDetail(id);
+        if (offline && offline.is_active !== false) {
+          verifiedWorkerCache.set(id, true);
+          verified.add(id);
+        } else {
+          missing.push(id);
+        }
+      }
+    }
+
+    if (missing.length === 0) {
+      return verified;
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('worker_profiles')
+        .select('user_id, is_active')
+        .in('user_id', missing);
+
+      if (!error && data) {
+        const activeIds = new Set<string>();
+        for (const row of data as any[]) {
+          if (row.is_active !== false) {
+            activeIds.add(row.user_id);
+          }
+        }
+        for (const id of missing) {
+          const isAct = activeIds.has(id);
+          verifiedWorkerCache.set(id, isAct);
+          if (isAct) verified.add(id);
+        }
+        return verified;
+      }
+    } catch {}
+
+    // Fallback if is_active column doesn't exist in schema
+    try {
+      const { data } = await supabase
+        .from('worker_profiles')
+        .select('user_id')
+        .in('user_id', missing);
+
+      if (data) {
+        const found = new Set((data as any[]).map((r) => r.user_id));
+        for (const id of missing) {
+          const isW = found.has(id);
+          verifiedWorkerCache.set(id, isW);
+          if (isW) verified.add(id);
+        }
+      }
+    } catch {}
+
+    return verified;
   }
 
   /**

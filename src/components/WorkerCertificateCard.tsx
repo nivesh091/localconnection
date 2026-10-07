@@ -1359,24 +1359,25 @@ export const WorkerCertificateCard: React.FC<{
         </div>
 
         {/* Main Worker Name (DIRECTLY BELOW PHOTO, HORIZONTALLY CENTERED WITH ORIGINAL BADGE) */}
-        <div className="mt-3 w-full flex items-center justify-center gap-2 px-2">
-          <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-tight truncate">
-            {data.name}
-          </h3>
-          {data.isVerified && (
-            <img
-              src={verificationLogo}
-              alt="Verified"
-              className="w-5 h-5 object-contain inline-block shrink-0 shadow-2xs"
-              style={{
-                paddingLeft: '0px',
-                paddingTop: '0px',
-                marginTop: '4px',
-                marginRight: '0px',
-                marginLeft: '-5px',
-              }}
-            />
-          )}
+        <div className="mt-3 w-full flex items-center justify-center px-2">
+          <div className="inline-flex items-center justify-center min-w-0">
+            <h3 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight leading-tight truncate">
+              {data.name}
+            </h3>
+            {data.isVerified && (
+              <img
+                src={verificationLogo}
+                alt="Verified"
+                className="w-5 h-5 object-contain inline-block shrink-0 shadow-2xs"
+                style={{
+                  paddingLeft: '0px',
+                  paddingTop: '0px',
+                  marginRight: '0px',
+                  marginLeft: '2px',
+                }}
+              />
+            )}
+          </div>
         </div>
 
         {/* Worker's Actual Service / Profession Type Pill (PINK PILL, NO CHECK ICON, VISIBLY LARGER FONT, WRAPPED) */}

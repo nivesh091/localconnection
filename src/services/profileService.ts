@@ -1,4 +1,5 @@
 import { supabase, isSchemaCacheError } from '../lib/supabase';
+import { safeStorage } from '../lib/storage';
 import { UserProfile, UserLocation } from '../types';
 import {
   parseWorkerMetadata,
@@ -44,6 +45,10 @@ export class ProfileService {
             console.warn('Profile fetch notice (offline or network retry):', error.message || error);
           }
           if (cached) return cached.data;
+          const stored = safeStorage.getItem(`kaammitra_profile_${userId}`);
+          if (stored) {
+            try { return JSON.parse(stored); } catch {}
+          }
           return null;
         }
 
@@ -129,12 +134,17 @@ export class ProfileService {
             is_mobile_public: isMobilePublic,
           };
 
+          safeStorage.setItem(`kaammitra_profile_${userId}`, JSON.stringify(sanitized));
           profileCache.set(userId, { data: sanitized, timestamp: Date.now() });
           return sanitized;
         }
         return null;
       } catch {
         if (cached) return cached.data;
+        const stored = safeStorage.getItem(`kaammitra_profile_${userId}`);
+        if (stored) {
+          try { return JSON.parse(stored); } catch {}
+        }
         return null;
       } finally {
         profileInFlight.delete(userId);
@@ -284,12 +294,23 @@ export class ProfileService {
 
         if (error) {
           if (cached) return cached.data;
+          const stored = safeStorage.getItem(`kaammitra_loc_${userId}`);
+          if (stored) {
+            try { return JSON.parse(stored); } catch {}
+          }
           return null;
+        }
+        if (data) {
+          safeStorage.setItem(`kaammitra_loc_${userId}`, JSON.stringify(data));
         }
         locationCache.set(userId, { data: data || null, timestamp: Date.now() });
         return data || null;
       } catch {
         if (cached) return cached.data;
+        const stored = safeStorage.getItem(`kaammitra_loc_${userId}`);
+        if (stored) {
+          try { return JSON.parse(stored); } catch {}
+        }
         return null;
       } finally {
         locationInFlight.delete(userId);

@@ -15,8 +15,10 @@ import {
 } from 'lucide-react';
 import { UserNotification } from '../types';
 import { UserNotificationService } from '../services/userNotificationService';
+import { WorkerService } from '../services/workerService';
 import { useTranslation } from '../hooks/useTranslation';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
+import verificationLogo from '@/verificationlogo.png';
 
 interface NotificationListModalProps {
   userId: string;
@@ -37,6 +39,31 @@ export const NotificationListModal: React.FC<NotificationListModalProps> = ({
   const [notifications, setNotifications] = useState<UserNotification[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  // Collect all sender IDs from notifications
+  const senderIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    for (const n of notifications) {
+      const sId = n.sender?.id || n.sender_id;
+      if (sId) ids.add(sId);
+    }
+    return Array.from(ids);
+  }, [notifications]);
+
+  const [workerUserIds, setWorkerUserIds] = useState<Set<string>>(() =>
+    WorkerService.getCachedWorkerUserIds(senderIds)
+  );
+
+  useEffect(() => {
+    if (senderIds.length === 0) return;
+    let isMounted = true;
+    WorkerService.getValidWorkerUserIds(senderIds).then((set) => {
+      if (isMounted) setWorkerUserIds(set);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [senderIds]);
 
   usePopupBackDismiss(isOpen, onClose);
 
@@ -200,6 +227,8 @@ export const NotificationListModal: React.FC<NotificationListModalProps> = ({
               const isWorker = notif.target_type === 'worker';
               const isReply = notif.notification_type === 'reply';
               const sender = notif.sender;
+              const senderId = sender?.id || notif.sender_id;
+              const isSenderWorker = Boolean(senderId && workerUserIds.has(senderId));
               const senderName = sender?.name || (lang === 'hi' ? 'उपयोगकर्ता' : 'User');
               const firstLetter = senderName.charAt(0).toUpperCase();
 
@@ -265,51 +294,70 @@ export const NotificationListModal: React.FC<NotificationListModalProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-1.5 flex-wrap">
                       <div className="flex items-center gap-1.5 min-w-0 flex-wrap">
-                        <span
-                          style={{ fontSize: '16px' }}
-                          className="font-bold text-slate-900 truncate"
-                        >
-                          {senderName}
-                        </span>
+                        <div className="inline-flex items-center min-w-0">
+                          <span
+                            style={{ fontSize: '16px' }}
+                            className="font-bold text-slate-900 truncate"
+                          >
+                            {senderName}
+                          </span>
+                          {isSenderWorker && (
+                            <img
+                              src={verificationLogo}
+                              alt="Verified"
+                              className="inline-block shrink-0 object-contain select-none"
+                              style={{
+                                width: '16px',
+                                height: '16px',
+                                marginLeft: '2px',
+                              }}
+                            />
+                          )}
+                        </div>
 
                         {/* Distinct Tag: Worker Profile vs Requirement */}
                         {isWorker ? (
                           <span
                             style={{
+                              display: 'none',
                               paddingLeft: '6px',
                               paddingTop: '2px',
                               marginLeft: '0px',
                               marginTop: '0px',
                               marginBottom: '4px',
                             }}
-                            className="inline-flex items-center gap-1 pr-1.5 pb-0.5 rounded-md font-bold bg-emerald-100 text-emerald-800 border border-emerald-300"
+                            className="hidden inline-flex items-center gap-1 pr-1.5 pb-0.5 rounded-md font-bold bg-emerald-100 text-emerald-800 border border-emerald-300"
                           >
                             <Briefcase className="w-2.5 h-2.5 text-emerald-700" />
                             <span style={{ fontSize: '11px' }}>
-                              {lang === 'hi' ? 'आपकी प्रोफ़ाइल पर टिप्पणी (Comment)' : 'Comment on your profile'}
+                              {lang === 'hi' ? '' : ''}
                             </span>
                           </span>
                         ) : (
                           <span
                             style={{
+                              display: 'none',
                               paddingLeft: '6px',
                               paddingTop: '2px',
                               marginLeft: '0px',
                               marginTop: '0px',
                               marginBottom: '4px',
                             }}
-                            className="inline-flex items-center gap-1 pr-1.5 pb-0.5 rounded-md font-bold bg-amber-100 text-amber-900 border border-amber-300"
+                            className="hidden inline-flex items-center gap-1 pr-1.5 pb-0.5 rounded-md font-bold bg-amber-100 text-amber-900 border border-amber-300"
                           >
                             <ClipboardList className="w-2.5 h-2.5 text-amber-800" />
                             <span style={{ fontSize: '11px' }}>
-                              {lang === 'hi' ? 'आपकी आवश्यकता पर टिप्पणी (Comment)' : 'Comment on your requirement'}
+                              {lang === 'hi' ? '' : ''}
                             </span>
                           </span>
                         )}
 
                         {/* Reply tag if threaded reply */}
                         {isReply && (
-                          <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200">
+                          <span
+                            style={{ display: 'none' }}
+                            className="hidden inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[9px] font-semibold bg-indigo-50 text-indigo-700 border border-indigo-200"
+                          >
                             <span>{lang === 'hi' ? 'जवाब' : 'Reply'}</span>
                           </span>
                         )}
@@ -318,7 +366,7 @@ export const NotificationListModal: React.FC<NotificationListModalProps> = ({
                       {/* Unread indicator pulse dot */}
                       {!notif.is_read && (
                         <span
-                          className={`w-2 h-2 rounded-full shrink-0 ${
+                          className={`hidden w-2 h-2 rounded-full shrink-0 ${
                             isWorker ? 'bg-emerald-600' : 'bg-amber-600'
                           }`}
                           title={lang === 'hi' ? 'नया' : 'New'}
@@ -327,7 +375,7 @@ export const NotificationListModal: React.FC<NotificationListModalProps> = ({
                     </div>
 
                     {/* Preview Text */}
-                    <div className="mt-1 flex items-baseline flex-wrap gap-1">
+                    <div className="mt-1 flex items-baseline flex-wrap gap-1.5 w-full min-w-0">
                       {notif.has_voice && (
                         <span className="inline-flex items-center gap-1 text-emerald-800 bg-emerald-100/90 border border-emerald-300 px-1.5 py-0.5 rounded text-[10px] font-bold shrink-0 shadow-2xs">
                           <Mic className="w-2.5 h-2.5 text-emerald-700" />
@@ -337,11 +385,10 @@ export const NotificationListModal: React.FC<NotificationListModalProps> = ({
                       <span
                         style={{
                           fontSize: '15px',
-                          marginLeft: '8px',
-                          marginTop: '0px',
-                          marginBottom: '0px',
+                          wordBreak: 'break-word',
+                          overflowWrap: 'anywhere',
                         }}
-                        className={`line-clamp-2 ${
+                        className={`break-words whitespace-normal ${
                           !notif.is_read ? 'text-slate-900 font-semibold' : 'text-slate-600'
                         }`}
                       >

@@ -14,10 +14,12 @@ import {
 } from 'lucide-react';
 import { CommentItem, CommentReference } from '../types';
 import { CommentService } from '../services/commentService';
+import { WorkerService } from '../services/workerService';
 import { VoiceRecorder } from './VoiceRecorder';
 import { CompactAudioPlayer } from './CompactAudioPlayer';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
+import verificationLogo from '@/verificationlogo.png';
 
 export interface CommentsSectionProps {
   targetType: 'worker' | 'requirement';
@@ -42,6 +44,34 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
   const [comments, setComments] = useState<CommentItem[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Collect all author IDs across all top-level comments and replies
+  const authorIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    const collect = (list: CommentItem[]) => {
+      for (const c of list) {
+        if (c.author_id) ids.add(c.author_id);
+        if (c.replies) collect(c.replies);
+      }
+    };
+    collect(comments);
+    return Array.from(ids);
+  }, [comments]);
+
+  const [workerUserIds, setWorkerUserIds] = useState<Set<string>>(() =>
+    WorkerService.getCachedWorkerUserIds(authorIds)
+  );
+
+  useEffect(() => {
+    if (authorIds.length === 0) return;
+    let isMounted = true;
+    WorkerService.getValidWorkerUserIds(authorIds).then((set) => {
+      if (isMounted) setWorkerUserIds(set);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [authorIds]);
 
   // Top-level new comment form state
   const [newText, setNewText] = useState('');
@@ -325,16 +355,17 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
     const authorName = item.author?.name || (lang === 'hi' ? 'उपयोगकर्ता' : 'User');
     const firstLetter = authorName.charAt(0).toUpperCase();
     const isHighlighted = highlightCommentId === item.id;
+    const isAuthorWorker = workerUserIds.has(item.author_id);
 
     return (
       <div
         key={item.id}
         id={`comment-${item.id}`}
         style={{
-          paddingTop: '12px',
-          paddingBottom: '12px',
-          paddingLeft: '19px',
-          paddingRight: '20px',
+          paddingTop: '13px',
+          paddingBottom: '11px',
+          paddingLeft: '4px',
+          paddingRight: '4px',
           marginRight: '0px',
           backgroundColor: isReply ? '#f4f4f4' : '#a9caca',
           ...(isReply ? { marginLeft: '40px' } : {}),
@@ -385,15 +416,29 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
 
             {/* Real Author Name */}
             <div className="min-w-0 flex-1">
+              <div className="inline-flex items-center min-w-0">
+                <span
+                  style={{ fontSize: '14px' }}
+                  className="text-[14px] font-bold text-slate-800 group-hover:text-teal-800 group-hover:underline transition truncate"
+                >
+                  {authorName}
+                </span>
+                {isAuthorWorker && (
+                  <img
+                    src={verificationLogo}
+                    alt="Verified"
+                    className="inline-block shrink-0 object-contain select-none"
+                    style={{
+                      width: '16px',
+                      height: '16px',
+                      marginLeft: '2px',
+                    }}
+                  />
+                )}
+              </div>
               <span
-                style={{ fontSize: '18px' }}
-                className="text-[18px] font-bold text-slate-800 group-hover:text-teal-800 group-hover:underline transition truncate block"
-              >
-                {authorName}
-              </span>
-              <span
-                style={{ fontSize: '12px' }}
-                className="text-[12px] text-slate-400 block"
+                style={{ fontSize: '11px', marginLeft: '0px', marginTop: '-4px' }}
+                className="text-[11px] text-slate-400 block"
               >
                 {formatTime(item.created_at)}
                 {isEdited && (
@@ -631,7 +676,7 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
   };
 
   return (
-    <div className="space-y-3">
+    <div style={{ backgroundColor: '#f0f5f5' }} className="space-y-3">
       {/* Comments Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">

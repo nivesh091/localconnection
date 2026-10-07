@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Edit3, Trash2, Play, Pause } from 'lucide-react';
 import { Requirement } from '../types';
 import { useAuth } from '../context/AuthContext';
@@ -6,6 +6,8 @@ import { useTranslation } from '../hooks/useTranslation';
 import { DistanceService } from '../services/distanceService';
 import { RequirementService } from '../services/requirementService';
 import { useShortcutAudio } from '../hooks/useShortcutAudio';
+import verificationLogo from '@/verificationlogo.png';
+import { WorkerService } from '../services/workerService';
 
 interface RequirementCardProps {
   requirement: Requirement;
@@ -43,9 +45,31 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
 
   // 1. Profile information of the requirement owner
   const owner = requirement.owner;
+  const ownerId = requirement.owner_id || owner?.id;
   const name = owner?.name?.trim() || (lang === 'hi' ? 'उपयोगकर्ता' : 'User');
   const photo = owner?.profile_photo;
   const firstLetter = name.charAt(0).toUpperCase();
+
+  const [isOwnerWorker, setIsOwnerWorker] = useState<boolean>(() => {
+    if (!ownerId) return false;
+    return WorkerService.getCachedWorkerUserIds([ownerId]).has(ownerId);
+  });
+
+  useEffect(() => {
+    if (!ownerId) {
+      setIsOwnerWorker(false);
+      return;
+    }
+    let isMounted = true;
+    WorkerService.getValidWorkerUserIds([ownerId]).then((set) => {
+      if (isMounted) {
+        setIsOwnerWorker(set.has(ownerId));
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [ownerId]);
 
   // 2. Name auto-fit styling
   const nameLength = name.length;
@@ -136,14 +160,26 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
           <div className="flex-1 min-w-0 text-center px-1">
             <h3
               style={{ ...nameStyle, fontSize: '19.92px' }}
-              className="font-bold text-[#1e293b] tracking-tight truncate leading-tight"
+              className="font-bold text-[#1e293b] tracking-tight leading-tight flex items-center justify-center"
             >
-              {name}
+              <span className="truncate">{name}</span>
+              {isOwnerWorker && (
+                <img
+                  src={verificationLogo}
+                  alt="Verified"
+                  className="inline-block shrink-0 object-contain select-none"
+                  style={{
+                    width: '16px',
+                    height: '16px',
+                    marginLeft: '2px',
+                  }}
+                />
+              )}
             </h3>
-            <div className="mt-1 flex justify-center">
+            <div style={{ flexWrap: 'wrap' }} className="mt-1 flex justify-center flex-wrap">
               <span
                 style={{ fontSize: '14px' }}
-                className="inline-flex items-center justify-center border border-[#94a3b8] bg-[#e2e8f0]/80 text-[#1e293b] rounded-full px-2.5 py-0.5 font-semibold tracking-tight leading-none max-w-full truncate shadow-2xs"
+                className="inline-flex items-center justify-center border border-[#94a3b8] bg-[#e2e8f0]/80 text-[#1e293b] rounded-full px-2.5 py-0.5 font-semibold tracking-tight leading-none max-w-full shadow-2xs"
               >
                 {categoryName}
               </span>

@@ -229,6 +229,48 @@ export async function withNetworkRetry<T>(
 }
 
 /**
+ * Determines whether an error is a temporary network/connectivity failure
+ */
+export function isNetworkError(error: unknown): boolean {
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
+  if (!error) return false;
+  const anyErr = error as any;
+  const message = anyErr instanceof Error ? anyErr.message : String(anyErr?.message || anyErr);
+  return (
+    message.includes('fetch failed') ||
+    message.includes('NetworkError') ||
+    message.includes('ENOTFOUND') ||
+    message.includes('Failed to fetch') ||
+    message.includes('abort') ||
+    message.includes('network') ||
+    message.includes('timeout') ||
+    anyErr?.name === 'AbortError' ||
+    anyErr?.status === 502 ||
+    anyErr?.status === 503 ||
+    anyErr?.status === 504 ||
+    anyErr?.code === 'PGRST000'
+  );
+}
+
+/**
+ * Determines whether an error is a genuine authentication/session-expiry error
+ */
+export function isAuthError(error: unknown): boolean {
+  if (!error) return false;
+  const anyErr = error as any;
+  const msg = anyErr instanceof Error ? anyErr.message : String(anyErr?.message || anyErr);
+  return (
+    msg.includes('JWT') ||
+    msg.includes('session expired') ||
+    msg.includes('Invalid login credentials') ||
+    msg.includes('token is expired') ||
+    msg.includes('invalid claim') ||
+    anyErr?.status === 401 ||
+    anyErr?.code === 'PGRST301'
+  );
+}
+
+/**
  * Normalizes backend / network errors into user-friendly Hindi & English messages
  * Never reveals raw SQL or sensitive traces to regular users (Section 89 & 91)
  */

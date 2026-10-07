@@ -1,9 +1,21 @@
-import { supabase, isSchemaCacheError, withNetworkRetry } from '../lib/supabase';
+import { supabase, isSchemaCacheError, withNetworkRetry, isNetworkError } from '../lib/supabase';
 import { safeStorage } from '../lib/storage';
+import { ChatIndexedDB, ConversationSnapshot } from '../lib/chatIndexedDB';
 import { Conversation, Message, MessageType, UserProfile, CommentReference } from '../types';
 import { MediaService } from './mediaService';
 
 export const ADMIN_USER_ID = '18aa47ec-9ecc-4c2e-ae51-e29f92dc9a72';
+
+export interface PendingMessageItem {
+  tempId: string;
+  conversationId: string;
+  senderId: string;
+  messageType: MessageType;
+  messageText?: string;
+  commentReference?: CommentReference;
+  message: Message;
+  createdAt: number;
+}
 
 // In-memory cache for fast navigation and deduplication
 const conversationsCache = new Map<string, { data: Conversation[]; timestamp: number }>();
@@ -44,6 +56,184 @@ export class ChatService {
   }
 
   /**
+   * Save the most recent conversation snapshot into IndexedDB whenever
+   * a message is successfully received or sent.
+   */
+  static async saveConversationSnapshot(
+    conversationId: string,
+    messages: Message[],
+    otherUser?: UserProfile | null
+  ): Promise<void> {
+    if (!conversationId || !messages) return;
+    try {
+      // 1. Sync safeStorage cache for instant zero-latency memory access
+      this.saveCachedMessages(conversationId, messages);
+      if (otherUser) {
+        this.saveCachedOtherUser(conversationId, otherUser);
+      }
+      // 2. Persist comprehensive snapshot into IndexedDB
+      await ChatIndexedDB.saveSnapshot(conversationId, messages, otherUser);
+    } catch (err) {
+      console.warn('[ChatService] Failed to save conversation snapshot to IndexedDB:', err);
+    }
+  }
+
+  /**
+   * Retrieve the most recent conversation snapshot from IndexedDB
+   */
+  static async getConversationSnapshot(
+    conversationId: string,
+    currentUserId?: string
+  ): Promise<{ messages: Message[]; otherUser?: UserProfile | null } | null> {
+    if (!conversationId) return null;
+    try {
+      const snapshot = await ChatIndexedDB.getSnapshot(conversationId);
+      if (snapshot && Array.isArray(snapshot.messages) && snapshot.messages.length > 0) {
+        const list = snapshot.messages.map((m: Message) => ({
+          ...m,
+          is_mine: currentUserId ? m.sender_id === currentUserId : m.is_mine,
+        }));
+
+        // Merge any pending offline messages
+        const pending = this.getPendingMessages(conversationId);
+        for (const item of pending) {
+          if (!list.some((m) => m.id === item.tempId)) {
+            list.push({
+              ...item.message,
+              is_mine: currentUserId ? item.message.sender_id === currentUserId : item.message.is_mine,
+            });
+          }
+        }
+
+        return {
+          messages: list,
+          otherUser: snapshot.otherUser || null,
+        };
+      }
+    } catch (err) {
+      console.warn('[ChatService] Failed to read snapshot from IndexedDB:', err);
+    }
+    return null;
+  }
+
+  /**
+   * Save messages into offline safeStorage cache and IndexedDB for a conversation
+   */
+  static saveCachedMessages(conversationId: string, messages: Message[], otherUser?: UserProfile | null): void {
+    if (!conversationId || !messages) return;
+    try {
+      // Exclude temporary pending messages from authoritative server cache
+      const serverMsgs = messages.filter((m) => m.status !== 'pending' && !m.id.startsWith('pending_'));
+      const slice = serverMsgs.slice(-150);
+      safeStorage.setItem(`km_chat_msgs_${conversationId}`, JSON.stringify(slice));
+      // Asynchronously mirror into IndexedDB snapshot
+      ChatIndexedDB.saveSnapshot(conversationId, slice, otherUser).catch(() => {});
+    } catch (err) {
+      console.warn('[ChatService] Failed to cache messages:', err);
+    }
+  }
+
+  /**
+   * Retrieve cached messages for a conversation, merged with any offline pending items
+   */
+  static getCachedMessages(conversationId: string, currentUserId?: string): Message[] {
+    if (!conversationId) return [];
+    try {
+      const raw = safeStorage.getItem(`km_chat_msgs_${conversationId}`);
+      let list: Message[] = [];
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+          list = parsed.map((m: Message) => ({
+            ...m,
+            is_mine: currentUserId ? m.sender_id === currentUserId : m.is_mine,
+          }));
+        }
+      }
+
+      // Merge any pending offline messages that are not yet on the server
+      const pending = this.getPendingMessages(conversationId);
+      for (const item of pending) {
+        if (!list.some((m) => m.id === item.tempId)) {
+          list.push({
+            ...item.message,
+            is_mine: currentUserId ? item.message.sender_id === currentUserId : item.message.is_mine,
+          });
+        }
+      }
+
+      return list;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Save and get other participant cached profile for offline rendering
+   */
+  static saveCachedOtherUser(conversationId: string, profile: UserProfile): void {
+    if (!conversationId || !profile) return;
+    try {
+      safeStorage.setItem(`km_chat_other_user_${conversationId}`, JSON.stringify(profile));
+    } catch {}
+  }
+
+  static getCachedOtherUser(conversationId: string): UserProfile | null {
+    if (!conversationId) return null;
+    try {
+      const raw = safeStorage.getItem(`km_chat_other_user_${conversationId}`);
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return null;
+  }
+
+  /**
+   * Pending messages queue management for offline sending
+   */
+  static getPendingMessages(conversationId: string): PendingMessageItem[] {
+    if (!conversationId) return [];
+    try {
+      const raw = safeStorage.getItem(`km_pending_msgs_${conversationId}`);
+      if (!raw) return [];
+      const list = JSON.parse(raw);
+      return Array.isArray(list) ? list : [];
+    } catch {
+      return [];
+    }
+  }
+
+  static addPendingMessage(conversationId: string, item: PendingMessageItem): void {
+    if (!conversationId || !item) return;
+    try {
+      const existing = this.getPendingMessages(conversationId);
+      const filtered = existing.filter((q) => q.tempId !== item.tempId);
+      filtered.push(item);
+      safeStorage.setItem(`km_pending_msgs_${conversationId}`, JSON.stringify(filtered));
+    } catch (err) {
+      console.warn('[ChatService] Failed to save pending message to storage:', err);
+    }
+  }
+
+  static removePendingMessage(conversationId: string, tempId: string): void {
+    if (!conversationId || !tempId) return;
+    try {
+      const existing = this.getPendingMessages(conversationId);
+      const filtered = existing.filter((q) => q.tempId !== tempId);
+      if (filtered.length > 0) {
+        safeStorage.setItem(`km_pending_msgs_${conversationId}`, JSON.stringify(filtered));
+      } else {
+        safeStorage.removeItem(`km_pending_msgs_${conversationId}`);
+      }
+    } catch {}
+  }
+
+  static clearPendingMessages(conversationId: string): void {
+    try {
+      safeStorage.removeItem(`km_pending_msgs_${conversationId}`);
+    } catch {}
+  }
+
+  /**
    * Get all conversations for a user ordered by last_message_at DESC (Section 36)
    */
   static async getConversations(userId: string): Promise<Conversation[]> {
@@ -80,9 +270,13 @@ export class ChatService {
           if (isSchemaCacheError(error)) {
             console.warn('Supabase conversations table not found in schema cache.');
           } else {
-            console.error('Error fetching conversations:', error);
+            console.warn('Conversations fetch notice (offline or network retry):', error.message || error);
           }
           if (cached) return cached.data;
+          const offlineRaw = safeStorage.getItem(`km_conversations_${userId}`);
+          if (offlineRaw) {
+            try { return JSON.parse(offlineRaw); } catch {}
+          }
           return [];
         }
 
@@ -205,9 +399,14 @@ export class ChatService {
         });
 
         conversationsCache.set(userId, { data: filteredList, timestamp: Date.now() });
+        safeStorage.setItem(`km_conversations_${userId}`, JSON.stringify(filteredList));
         return filteredList;
       } catch {
         if (cached) return cached.data;
+        const offlineRaw = safeStorage.getItem(`km_conversations_${userId}`);
+        if (offlineRaw) {
+          try { return JSON.parse(offlineRaw); } catch {}
+        }
         return [];
       } finally {
         conversationsInFlight.delete(userId);
@@ -314,17 +513,20 @@ export class ChatService {
 
       if (existing) {
         const other = existing.user_1_id === userId ? existing.user2 : existing.user1;
+        const convObj: Conversation = {
+          ...existing,
+          other_user: other
+            ? ({
+                ...other,
+                is_worker: isTargetWorker,
+                is_worker_active: isWorkerActive,
+              } as unknown as UserProfile)
+            : undefined,
+        };
+        safeStorage.setItem(`km_conv_${userId}_${targetUserId}`, JSON.stringify(convObj));
+        safeStorage.setItem(`km_conv_by_id_${convObj.id}`, JSON.stringify(convObj));
         return {
-          conversation: {
-            ...existing,
-            other_user: other
-              ? ({
-                  ...other,
-                  is_worker: isTargetWorker,
-                  is_worker_active: isWorkerActive,
-                } as unknown as UserProfile)
-              : undefined,
-          },
+          conversation: convObj,
         };
       }
 
@@ -347,6 +549,12 @@ export class ChatService {
         .single();
 
       if (error || !created) {
+        const cachedConv = safeStorage.getItem(`km_conv_${userId}_${targetUserId}`);
+        if (cachedConv) {
+          try {
+            return { conversation: JSON.parse(cachedConv) };
+          } catch {}
+        }
         return { conversation: null, error: error?.message || 'बातचीत शुरू नहीं हो सकी।' };
       }
 
@@ -357,19 +565,29 @@ export class ChatService {
         .eq('id', targetUserId)
         .maybeSingle();
 
+      const newConvObj: Conversation = {
+        ...created,
+        other_user: otherProfile
+          ? ({
+              ...otherProfile,
+              is_worker: isTargetWorker,
+              is_worker_active: isWorkerActive,
+            } as unknown as UserProfile)
+          : undefined,
+      };
+      safeStorage.setItem(`km_conv_${userId}_${targetUserId}`, JSON.stringify(newConvObj));
+      safeStorage.setItem(`km_conv_by_id_${newConvObj.id}`, JSON.stringify(newConvObj));
+
       return {
-        conversation: {
-          ...created,
-          other_user: otherProfile
-            ? ({
-                ...otherProfile,
-                is_worker: isTargetWorker,
-                is_worker_active: isWorkerActive,
-              } as unknown as UserProfile)
-            : undefined,
-        },
+        conversation: newConvObj,
       };
     } catch (err) {
+      const cachedConv = safeStorage.getItem(`km_conv_${userId}_${targetUserId}`);
+      if (cachedConv) {
+        try {
+          return { conversation: JSON.parse(cachedConv) };
+        } catch {}
+      }
       return { conversation: null, error: err instanceof Error ? err.message : 'त्रुटि' };
     }
   }
@@ -460,7 +678,14 @@ export class ChatService {
         .eq('conversation_id', conversationId)
         .order('created_at', { ascending: true });
 
-      if (error || !messages) return [];
+      if (error || !messages) {
+        console.warn('[ChatService] getMessages error or offline, serving from IndexedDB / cached snapshot:', error?.message || error);
+        const idbSnapshot = await this.getConversationSnapshot(conversationId, currentUserId);
+        if (idbSnapshot && idbSnapshot.messages.length > 0) {
+          return idbSnapshot.messages;
+        }
+        return this.getCachedMessages(conversationId, currentUserId);
+      }
 
       // 2. Get deleted-for-me ids
       const { data: deletedList } = await supabase
@@ -596,10 +821,33 @@ export class ChatService {
         console.warn('Error fetching admin communication in getMessages:', adminErr);
       }
 
+      // 6. Cache latest authoritative messages for offline use and mirror to IndexedDB
+      this.saveCachedMessages(conversationId, result);
+      ChatIndexedDB.saveSnapshot(conversationId, result).catch(() => {});
+
+      // 7. Merge any pending offline messages
+      const pendingList = this.getPendingMessages(conversationId);
+      if (pendingList.length > 0) {
+        for (const item of pendingList) {
+          if (!result.some((m) => m.id === item.tempId)) {
+            result.push({
+              ...item.message,
+              is_mine: item.message.sender_id === currentUserId,
+            });
+          }
+        }
+      }
+
       return result;
     } catch (err) {
-      console.error('getMessages error:', err);
-      return [];
+      console.warn('getMessages error, falling back to IndexedDB / cached messages:', err);
+      try {
+        const idbSnapshot = await this.getConversationSnapshot(conversationId, currentUserId);
+        if (idbSnapshot && idbSnapshot.messages.length > 0) {
+          return idbSnapshot.messages;
+        }
+      } catch {}
+      return this.getCachedMessages(conversationId, currentUserId);
     }
   }
 
@@ -729,13 +977,23 @@ export class ChatService {
 
       invalidateChatCaches(params.senderId);
 
+      const sentMsgObj: Message = {
+        ...msg,
+        media_id: mediaId,
+        is_mine: true,
+        media_url: signedMediaUrl,
+      };
+
+      // Save updated conversation snapshot into IndexedDB whenever a message is successfully sent
+      try {
+        const cached = this.getCachedMessages(params.conversationId, params.senderId);
+        const nextList = [...cached.filter((m) => m.id !== sentMsgObj.id), sentMsgObj];
+        this.saveCachedMessages(params.conversationId, nextList);
+        ChatIndexedDB.saveSnapshot(params.conversationId, nextList).catch(() => {});
+      } catch {}
+
       return {
-        message: {
-          ...msg,
-          media_id: mediaId,
-          is_mine: true,
-          media_url: signedMediaUrl,
-        },
+        message: sentMsgObj,
       };
     } catch (err) {
       return { message: null, error: err instanceof Error ? err.message : 'त्रुटि' };

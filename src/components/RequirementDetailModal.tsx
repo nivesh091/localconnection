@@ -14,6 +14,8 @@ import { ReportProviderModal } from './ReportProviderModal';
 import { CommentsSection } from './CommentsSection';
 import { WorkerDetailModal } from './WorkerDetailModal';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
+import verificationLogo from '@/verificationlogo.png';
+import { WorkerService } from '../services/workerService';
 
 interface RequirementDetailModalProps {
   requirement?: Requirement | null;
@@ -65,9 +67,31 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
   usePopupBackDismiss(Boolean(requirement), onClose);
 
   const owner = requirement?.owner;
+  const ownerId = requirement?.owner_id || owner?.id;
   const name = owner?.name?.trim() || (lang === 'hi' ? 'उपयोगकर्ता' : 'User');
   const photo = owner?.profile_photo;
   const firstLetter = name.charAt(0).toUpperCase();
+
+  const [isOwnerWorker, setIsOwnerWorker] = useState<boolean>(() => {
+    if (!ownerId) return false;
+    return WorkerService.getCachedWorkerUserIds([ownerId]).has(ownerId);
+  });
+
+  useEffect(() => {
+    if (!ownerId) {
+      setIsOwnerWorker(false);
+      return;
+    }
+    let isMounted = true;
+    WorkerService.getValidWorkerUserIds([ownerId]).then((set) => {
+      if (isMounted) {
+        setIsOwnerWorker(set.has(ownerId));
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [ownerId]);
 
   // Mobile Privacy checks
   const isMobilePublic =
@@ -284,11 +308,23 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
 
                 {/* Name & Category */}
                 <div className="flex-1 min-w-0 text-center">
-                  <h2 className="text-base sm:text-lg font-bold text-[#1e293b] truncate">
-                    {name}
+                  <h2 className="text-base sm:text-lg font-bold text-[#1e293b] flex items-center justify-center">
+                    <span className="truncate">{name}</span>
+                    {isOwnerWorker && (
+                      <img
+                        src={verificationLogo}
+                        alt="Verified"
+                        className="inline-block shrink-0 object-contain select-none"
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          marginLeft: '2px',
+                        }}
+                      />
+                    )}
                   </h2>
-                  <div className="mt-1 flex justify-center">
-                    <span className="inline-flex items-center justify-center border border-[#94a3b8] bg-[#e2e8f0]/80 text-[#1e293b] rounded-full px-3 py-0.5 text-xs sm:text-sm font-semibold truncate shadow-2xs">
+                  <div style={{ flexWrap: 'wrap' }} className="mt-1 flex justify-center flex-wrap">
+                    <span className="inline-flex items-center justify-center border border-[#94a3b8] bg-[#e2e8f0]/80 text-[#1e293b] rounded-full px-3 py-0.5 text-xs sm:text-sm font-semibold shadow-2xs">
                       {categoryName}
                     </span>
                   </div>

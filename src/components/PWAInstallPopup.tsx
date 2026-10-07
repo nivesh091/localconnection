@@ -10,7 +10,7 @@ const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
 export const PWAInstallPopup: React.FC = () => {
   const { isInstallable, isInstalled, isIOS, install } = usePWAInstall();
   const { lang } = useTranslation();
-  const { websiteName, websiteNameEn } = useWebsiteBranding();
+  const { websiteName, websiteNameEn, logoUrl } = useWebsiteBranding();
 
   const [isOpen, setIsOpen] = useState(false);
   const [showIOSModal, setShowIOSModal] = useState(false);
@@ -96,7 +96,7 @@ export const PWAInstallPopup: React.FC = () => {
             <div className="flex items-center gap-3.5 mb-3">
               <div className="w-14 h-14 rounded-2xl overflow-hidden shadow-md border-2 border-teal-600 shrink-0 bg-teal-50 flex items-center justify-center">
                 <img
-                  src="/logo.jpg"
+                  src={logoUrl || '/logo.jpg'}
                   alt="App Logo"
                   className="w-full h-full object-cover"
                   onError={(e) => {

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   ArrowLeft,
   Phone,
@@ -19,12 +19,15 @@ import {
   Search,
   ChevronUp,
   ChevronDown,
+  Wifi,
+  WifiOff,
 } from 'lucide-react';
 import { Message, MessageType, UserProfile, WorkerProfile, UserLocation, CommentReference } from '../types';
 import { ChatService, ADMIN_USER_ID } from '../services/chatService';
 import { ProfileService } from '../services/profileService';
 import { WorkerService } from '../services/workerService';
 import { LocationService } from '../services/locationService';
+import { safeStorage } from '../lib/storage';
 import { AudioPlayer } from '../components/AudioPlayer';
 import { VoiceRecorder } from '../components/VoiceRecorder';
 import { WorkerDetailModal } from '../components/WorkerDetailModal';
@@ -288,13 +291,44 @@ export const ChatPage: React.FC<ChatPageProps> = ({
   const { t, lang } = useTranslation();
   const { websiteName } = useWebsiteBranding();
 
-  const [otherUser, setOtherUser] = useState<UserProfile | null>(null);
+  const [otherUser, setOtherUser] = useState<UserProfile | null>(() => {
+    return ChatService.getCachedOtherUser(conversationId);
+  });
   const [otherWorker, setOtherWorker] = useState<WorkerProfile | null>(null);
   const [otherLocation, setOtherLocation] = useState<UserLocation | null>(null);
-  const [messages, setMessages] = useState<Message[]>([]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    return ChatService.getCachedMessages(conversationId, user?.id);
+  });
   const [inputText, setInputText] = useState('');
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState<boolean>(() => {
+    const cached = ChatService.getCachedMessages(conversationId, user?.id);
+    return cached.length === 0;
+  });
   const [isSending, setIsSending] = useState(false);
+  const [isOnline, setIsOnline] = useState<boolean>(() =>
+    typeof navigator !== 'undefined' ? navigator.onLine : true
+  );
+  const [showReconnectedBanner, setShowReconnectedBanner] = useState(false);
+  const isSyncingPendingRef = useRef(false);
+
+  // Monitor network online/offline state
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      setShowReconnectedBanner(true);
+      window.setTimeout(() => setShowReconnectedBanner(false), 2500);
+    };
+    const handleOffline = () => {
+      setIsOnline(false);
+      setShowReconnectedBanner(false);
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
 
   // Active temporary WhatsApp-style comment reference in composer
   const [activeCommentRef, setActiveCommentRef] = useState<CommentReference | null>(
@@ -605,10 +639,12 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       const isWorker = wRowRes.status === 'fulfilled' && Boolean(wRowRes.value?.data);
 
       if (pRes.status === 'fulfilled' && pRes.value) {
-        setOtherUser({
+        const otherProfileObj = {
           ...pRes.value,
           is_worker: isWorker,
-        });
+        };
+        setOtherUser(otherProfileObj);
+        ChatService.saveCachedOtherUser(conversationId, otherProfileObj);
       }
       if (locRes.status === 'fulfilled') setOtherLocation(locRes.value);
       if (wRes.status === 'fulfilled' && wRes.value) {
@@ -629,6 +665,28 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     loadMeta();
   }, [otherUserId, conversationId, user]);
 
+  // 1b. Asynchronously hydrate from local IndexedDB cache on mount to prevent data loss
+  useEffect(() => {
+    let isMounted = true;
+    ChatService.getConversationSnapshot(conversationId, user?.id).then((snapshot) => {
+      if (isMounted && snapshot && snapshot.messages.length > 0) {
+        setMessages((current) => {
+          if (current.length === 0 || current.length < snapshot.messages.length) {
+            return snapshot.messages;
+          }
+          return current;
+        });
+        if (snapshot.otherUser) {
+          setOtherUser((prev) => prev || snapshot.otherUser || null);
+        }
+        setIsLoading(false);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, [conversationId, user?.id]);
+
   // 2. Fetch messages & subscribe to realtime (Point 2 & Point 30)
   useEffect(() => {
     if (!user) return;
@@ -636,16 +694,47 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     let isMounted = true;
 
     async function load(showSpinner = true) {
-      if (showSpinner) setIsLoading(true);
+      if (showSpinner) {
+        setMessages((current) => {
+          if (current.length === 0) setIsLoading(true);
+          return current;
+        });
+      }
       try {
         const list = await ChatService.getMessages(conversationId, currentUserId);
         if (isMounted) {
-          setMessages(list);
+          if (list && list.length > 0) {
+            setMessages(list);
+            // Save authoritative snapshot into IndexedDB
+            ChatService.saveConversationSnapshot(conversationId, list, otherUser);
+          } else {
+            // Fallback to IndexedDB local cache if server returned empty due to network drop
+            const snapshot = await ChatService.getConversationSnapshot(conversationId, currentUserId);
+            if (snapshot && snapshot.messages.length > 0) {
+              setMessages(snapshot.messages);
+              if (snapshot.otherUser) {
+                setOtherUser((prev) => prev || snapshot.otherUser || null);
+              }
+            } else if (navigator.onLine) {
+              setMessages(list);
+            }
+          }
           if (showSpinner) setIsLoading(false);
         }
-        await ChatService.markAsRead(conversationId, currentUserId);
+        if (navigator.onLine) {
+          await ChatService.markAsRead(conversationId, currentUserId).catch(() => {});
+        }
       } catch (err) {
-        console.warn('Chat load error:', err);
+        console.warn('Chat load error, hydrating from local IndexedDB cache:', err);
+        if (isMounted) {
+          const snapshot = await ChatService.getConversationSnapshot(conversationId, currentUserId);
+          if (snapshot && snapshot.messages.length > 0) {
+            setMessages(snapshot.messages);
+            if (snapshot.otherUser) {
+              setOtherUser((prev) => prev || snapshot.otherUser || null);
+            }
+          }
+        }
       } finally {
         if (isMounted && showSpinner) setIsLoading(false);
       }
@@ -671,19 +760,23 @@ export const ChatPage: React.FC<ChatPageProps> = ({
           media_url: incomingMsg.media_url || null,
         };
 
-        // Add message to state immediately so message bubble appears
+        // Add message to state immediately and save snapshot to IndexedDB
         setMessages((prev) => {
           const existingIdx = prev.findIndex((m) => m.id === incomingMsg.id);
+          let updated: Message[];
           if (existingIdx !== -1) {
-            const updated = [...prev];
+            updated = [...prev];
             updated[existingIdx] = {
               ...updated[existingIdx],
               ...formattedMsg,
               media_url: updated[existingIdx].media_url || formattedMsg.media_url,
             };
-            return updated;
+          } else {
+            updated = [...prev, formattedMsg];
           }
-          return [...prev, formattedMsg];
+          // Save most recent conversation snapshot into IndexedDB whenever message is received
+          ChatService.saveConversationSnapshot(conversationId, updated, otherUser);
+          return updated;
         });
 
         // If media message and media_url not yet set, resolve with bounded retry
@@ -776,34 +869,80 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     prevMessagesCountRef.current = messages.length;
   }, [messages]);
 
-  // Offline queue auto-flush on internet reconnect (Requirement 25 & 26)
-  useEffect(() => {
-    const flushPendingQueue = async () => {
-      if (!user || pendingQueueRef.current.length === 0) return;
-      const queue = [...pendingQueueRef.current];
-      for (const item of queue) {
+  // Helper to record a newly sent message and immediately persist snapshot into IndexedDB
+  const recordSentMessageAndSaveSnapshot = useCallback(
+    (sentMsg: Message) => {
+      setMessages((prev) => {
+        const exists = prev.some((m) => m.id === sentMsg.id);
+        const next = exists ? prev : [...prev, sentMsg];
+        ChatService.saveConversationSnapshot(conversationId, next, otherUser);
+        return next;
+      });
+    },
+    [conversationId, otherUser]
+  );
+
+  // Synchronize pending offline messages to Supabase backend in FIFO order
+  const syncPendingMessages = useCallback(async () => {
+    if (!user || isSyncingPendingRef.current || !navigator.onLine) return;
+
+    const pendingList = ChatService.getPendingMessages(conversationId);
+    if (pendingList.length === 0) return;
+
+    isSyncingPendingRef.current = true;
+    try {
+      for (const item of pendingList) {
         try {
           const res = await ChatService.sendMessage({
             conversationId,
             senderId: user.id,
-            messageType: 'text',
-            messageText: item.text,
+            messageType: item.messageType || 'text',
+            messageText: item.messageText,
+            commentReference: item.commentReference,
           });
+
           if (res.message) {
-            setMessages((prev) =>
-              prev.map((m) => (m.id === item.tempId ? { ...res.message!, is_mine: true } : m))
-            );
-            pendingQueueRef.current = pendingQueueRef.current.filter((q) => q.tempId !== item.tempId);
+            // Remove from offline storage queue
+            ChatService.removePendingMessage(conversationId, item.tempId);
+            // Replace temporary pending message with authoritative server message in UI & save snapshot
+            setMessages((prev) => {
+              const updated = prev.map((m) =>
+                m.id === item.tempId ? { ...res.message!, is_mine: true } : m
+              );
+              ChatService.saveConversationSnapshot(conversationId, updated, otherUser);
+              return updated;
+            });
           }
-        } catch {
-          // Will retry on next online event
+        } catch (err) {
+          console.warn('[ChatPage] Pending message sync error for tempId:', item.tempId, err);
+          break; // Stop and retry on next event if network failed
         }
       }
-    };
+    } finally {
+      isSyncingPendingRef.current = false;
+    }
+  }, [conversationId, user, otherUser]);
 
-    window.addEventListener('online', flushPendingQueue);
-    return () => window.removeEventListener('online', flushPendingQueue);
-  }, [conversationId, user]);
+  // Flush pending messages on online event and periodic check
+  useEffect(() => {
+    if (navigator.onLine) {
+      syncPendingMessages();
+    }
+    const handleOnline = () => {
+      syncPendingMessages();
+    };
+    window.addEventListener('online', handleOnline);
+    const interval = window.setInterval(() => {
+      if (navigator.onLine && ChatService.getPendingMessages(conversationId).length > 0) {
+        syncPendingMessages();
+      }
+    }, 12000);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.clearInterval(interval);
+    };
+  }, [conversationId, syncPendingMessages]);
 
   // Send Text with offline queue support (Requirement 26)
   const handleSendText = async (e?: React.FormEvent) => {
@@ -816,55 +955,91 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     setActiveCommentRef(null);
     onClearCommentReference?.();
 
-    // If device is currently offline, queue in-memory with clear pending indicator
-    if (!navigator.onLine) {
-      const tempId = `pending_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
-      const pendingMsg: Message = {
-        id: tempId,
-        conversation_id: conversationId,
-        sender_id: user.id,
-        message_type: 'text',
-        message_text: text,
-        deleted_for_everyone: false,
-        status: 'pending',
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
-        is_mine: true,
-        reference_type: commentRefToSend ? 'comment' : null,
-        reference_comment_id: commentRefToSend?.commentId || null,
-        reference_preview: commentRefToSend?.textPreview || null,
-        reference_metadata: commentRefToSend
-          ? {
-              comment_id: commentRefToSend.commentId,
-              author_id: commentRefToSend.authorId,
-              author_name: commentRefToSend.authorName,
-              target_type: commentRefToSend.targetType,
-              target_id: commentRefToSend.targetId,
-              has_voice: commentRefToSend.hasVoice,
-              text: commentRefToSend.textPreview,
-            }
-          : null,
-      };
+    const tempId = `pending_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const pendingMsg: Message = {
+      id: tempId,
+      conversation_id: conversationId,
+      sender_id: user.id,
+      message_type: 'text',
+      message_text: text,
+      deleted_for_everyone: false,
+      status: 'pending',
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      is_mine: true,
+      reference_type: commentRefToSend ? 'comment' : null,
+      reference_comment_id: commentRefToSend?.commentId || null,
+      reference_preview: commentRefToSend?.textPreview || null,
+      reference_metadata: commentRefToSend
+        ? {
+            comment_id: commentRefToSend.commentId,
+            author_id: commentRefToSend.authorId,
+            author_name: commentRefToSend.authorName,
+            target_type: commentRefToSend.targetType,
+            target_id: commentRefToSend.targetId,
+            has_voice: commentRefToSend.hasVoice,
+            text: commentRefToSend.textPreview,
+          }
+        : null,
+    };
 
-      pendingQueueRef.current.push({ tempId, text });
+    // If device is currently offline, queue in persistent safeStorage with pending indicator
+    if (!navigator.onLine) {
+      ChatService.addPendingMessage(conversationId, {
+        tempId,
+        conversationId,
+        senderId: user.id,
+        messageType: 'text',
+        messageText: text,
+        commentReference: commentRefToSend || undefined,
+        message: pendingMsg,
+        createdAt: Date.now(),
+      });
       setMessages((prev) => [...prev, pendingMsg]);
       return;
     }
 
     setIsSending(true);
-    const res = await ChatService.sendMessage({
-      conversationId,
-      senderId: user.id,
-      messageType: 'text',
-      messageText: text,
-      commentReference: commentRefToSend || undefined,
-    });
-    setIsSending(false);
+    try {
+      const res = await ChatService.sendMessage({
+        conversationId,
+        senderId: user.id,
+        messageType: 'text',
+        messageText: text,
+        commentReference: commentRefToSend || undefined,
+      });
 
-    if (res.message) {
-      setMessages((prev) =>
-        prev.some((m) => m.id === res.message!.id) ? prev : [...prev, res.message!]
-      );
+      if (res.message) {
+        recordSentMessageAndSaveSnapshot(res.message);
+      } else {
+        // Network or server issue: preserve as pending message
+        ChatService.addPendingMessage(conversationId, {
+          tempId,
+          conversationId,
+          senderId: user.id,
+          messageType: 'text',
+          messageText: text,
+          commentReference: commentRefToSend || undefined,
+          message: pendingMsg,
+          createdAt: Date.now(),
+        });
+        setMessages((prev) => [...prev, pendingMsg]);
+      }
+    } catch {
+      // Network drop: preserve as pending message
+      ChatService.addPendingMessage(conversationId, {
+        tempId,
+        conversationId,
+        senderId: user.id,
+        messageType: 'text',
+        messageText: text,
+        commentReference: commentRefToSend || undefined,
+        message: pendingMsg,
+        createdAt: Date.now(),
+      });
+      setMessages((prev) => [...prev, pendingMsg]);
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -888,9 +1063,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     setIsSending(false);
 
     if (res.message) {
-      setMessages((prev) =>
-        prev.some((m) => m.id === res.message!.id) ? prev : [...prev, res.message!]
-      );
+      recordSentMessageAndSaveSnapshot(res.message);
     }
   };
 
@@ -928,9 +1101,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     setIsSending(false);
 
     if (res.message) {
-      setMessages((prev) =>
-        prev.some((m) => m.id === res.message!.id) ? prev : [...prev, res.message!]
-      );
+      recordSentMessageAndSaveSnapshot(res.message);
     }
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -1002,9 +1173,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     setIsSending(false);
 
     if (res.message) {
-      setMessages((prev) =>
-        prev.some((m) => m.id === res.message!.id) ? prev : [...prev, res.message!]
-      );
+      recordSentMessageAndSaveSnapshot(res.message);
     }
   };
 
@@ -1163,7 +1332,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       className="flex flex-col h-full max-h-[100dvh] w-full max-w-2xl mx-auto bg-[#f0f2f5] border-x border-slate-200 overflow-hidden relative"
     >
       {/* 1. TOP: Chat Header - STRICTLY FIXED AT TOP */}
-      <div className="shrink-0 z-30 bg-white border-b border-slate-200 shadow-2xs pt-[max(0.625rem,env(safe-area-inset-top))]">
+      <div
+        style={{ backgroundColor: '#fff1f1' }}
+        className="shrink-0 z-30 border-b border-slate-200 shadow-2xs pt-[max(0.625rem,env(safe-area-inset-top))]"
+      >
         {/* Top Receiver Identity Row */}
         <div className="px-3 py-2.5 flex items-center justify-between gap-2 w-full min-w-0">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -1203,21 +1375,23 @@ export const ChatPage: React.FC<ChatPageProps> = ({
               {/* Name & Category + Verified Worker Badge */}
               <div className="min-w-0">
                 <div className="flex items-center gap-1.5 flex-nowrap">
-                  <h3 className="text-sm font-bold text-slate-900 truncate leading-tight">
-                    {name}
-                  </h3>
-                  {isVerifiedWorker && (
-                    <img
-                      src={verificationLogo}
-                      alt="Verified Professional"
-                      className="inline-block shrink-0 object-contain select-none"
-                      style={{
-                        width: '16px',
-                        height: '16px',
-                        verticalAlign: 'middle',
-                      }}
-                    />
-                  )}
+                  <div className="inline-flex items-center min-w-0">
+                    <h3 className="text-sm font-bold text-slate-900 truncate leading-tight">
+                      {name}
+                    </h3>
+                    {isVerifiedWorker && (
+                      <img
+                        src={verificationLogo}
+                        alt="Verified Professional"
+                        className="inline-block shrink-0 object-contain select-none"
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          marginLeft: '2px',
+                        }}
+                      />
+                    )}
+                  </div>
                   {isOtherWorkerDeactivated && (
                     <span className="text-[10px] font-bold text-rose-700 bg-rose-50 border border-rose-300 px-1.5 py-0.5 rounded-full whitespace-nowrap">
                       Deactivated
@@ -1351,19 +1525,34 @@ export const ChatPage: React.FC<ChatPageProps> = ({
         )}
       </div>
 
+      {/* Offline Status Bar (Modern messaging app style: clean, non-intrusive) */}
+      {!isOnline && (
+        <div className="bg-amber-100/95 border-b border-amber-300 px-3 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold text-amber-900 select-none shadow-2xs">
+          <WifiOff className="w-3.5 h-3.5 text-amber-700 shrink-0" />
+          <span>{lang === 'hi' ? 'आप ऑफलाइन हैं' : 'You are offline'}</span>
+        </div>
+      )}
+
+      {isOnline && showReconnectedBanner && (
+        <div className="bg-emerald-100/95 border-b border-emerald-300 px-3 py-1.5 flex items-center justify-center gap-2 text-xs font-semibold text-emerald-900 select-none shadow-2xs">
+          <Wifi className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+          <span>{lang === 'hi' ? 'वापस ऑनलाइन हैं' : 'Back online'}</span>
+        </div>
+      )}
+
       {/* 2. MIDDLE: Messages Scroll Area - ONLY SCROLLING AREA */}
       <div
         id="chat-messages-container"
         ref={messagesContainerRef}
         style={{
-          backgroundColor: '#f0f2f5',
+          backgroundColor: '#a0c2ce',
           WebkitTouchCallout: 'none',
           WebkitUserSelect: 'none',
           MozUserSelect: 'none',
           msUserSelect: 'none',
           userSelect: 'none',
         }}
-        className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2.5 overscroll-contain bg-[#f0f2f5] select-none"
+        className="flex-1 min-h-0 overflow-y-auto p-3 space-y-2.5 overscroll-contain bg-[#a0c2ce] select-none"
       >
         {isLoading ? (
           <div className="py-12 text-center text-xs text-slate-400">{t.loading}</div>
@@ -1411,6 +1600,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                   onContextMenu={(e) => handleContextMenu(e, msg)}
                   onDragStart={(e) => e.preventDefault()}
                   style={{
+                    backgroundColor: isMine ? '#a9ffa9' : '#ffffff',
+                    fontSize: '16px',
                     WebkitTouchCallout: 'none',
                     WebkitUserSelect: 'none',
                     MozUserSelect: 'none',
@@ -1418,7 +1609,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                     userSelect: 'none',
                     touchAction: 'pan-y',
                   }}
-                  className={`max-w-[85%] rounded-2xl p-3 shadow-2xs text-xs sm:text-sm break-words [overflow-wrap:anywhere] min-w-0 transition-all ${
+                  className={`max-w-[85%] rounded-2xl p-3 shadow-2xs text-[16px] break-words [overflow-wrap:anywhere] min-w-0 transition-all ${
                     isSelectedSearchMatch
                       ? 'ring-4 ring-amber-500 ring-offset-2 ring-offset-slate-100 shadow-lg scale-[1.02] bg-amber-50 text-slate-900 border-2 border-amber-500'
                       : isSearchMatch
@@ -1430,7 +1621,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                     isSelectedSearchMatch
                       ? ''
                       : isMine
-                      ? 'bg-emerald-100 border border-emerald-300/80 text-emerald-950 rounded-br-xs'
+                      ? 'bg-[#a9ffa9] border border-emerald-300/80 text-emerald-950 rounded-br-xs'
                       : 'bg-white text-slate-900 border border-slate-200/90 rounded-bl-xs'
                   }`}
                 >
@@ -1557,6 +1748,13 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                           <CheckCheck className="w-3.5 h-3.5 text-emerald-800" />
                         ) : msg.status === 'sent' ? (
                           <Check className="w-3.5 h-3.5 text-emerald-800" />
+                        ) : msg.status === 'pending' ? (
+                          <span
+                            className="flex items-center gap-0.5 text-amber-700 font-semibold"
+                            title={lang === 'hi' ? 'पेंडिंग (ऑफ़लाइन)' : 'Pending (Offline)'}
+                          >
+                            <Clock className="w-3 h-3 text-amber-700" />
+                          </span>
                         ) : (
                           <span className="flex items-center gap-0.5 text-amber-700" title="भेजा जा रहा है...">
                             <Clock className="w-3 h-3 animate-spin" />
@@ -1709,6 +1907,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
             Text cleared: Mic returns! */}
         <form
           onSubmit={handleSendText}
+          style={{ backgroundColor: '#ffffff' }}
           className="p-2 sm:p-2.5 flex items-center gap-1.5 sm:gap-2"
         >
           {/* Left: Photo & Location controls */}
@@ -1754,7 +1953,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
               }, 120);
             }}
             placeholder="मैसेज लिखें..."
-            className="flex-1 min-w-0 h-10 px-3.5 rounded-full border border-slate-300 text-xs sm:text-sm focus:outline-none focus:border-teal-700 bg-slate-50 focus:bg-white transition"
+            style={{ backgroundColor: '#f5f5f5' }}
+            className="flex-1 min-w-0 h-10 px-3.5 rounded-full border border-slate-300 text-xs sm:text-sm focus:outline-none focus:border-teal-700 bg-[#f5f5f5] focus:bg-white transition"
           />
 
           {/* Right: Mic if empty, Send Arrow if typing (Section 37) */}
