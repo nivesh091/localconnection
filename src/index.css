@@ -1,0 +1,104 @@
+@import "tailwindcss";
+
+/* Leaflet map custom pin styles and isolated stacking context */
+.leaflet-container {
+  font-family: inherit;
+  width: 100%;
+  height: 100%;
+  position: relative;
+  z-index: 10;
+  isolation: isolate;
+}
+
+/* Scoped Leaflet panes and controls stay strictly within the map container context
+   (Hierarchy: Map z-10 < Map Controls z-20 < Header z-40 < Sidebar & Modals z-50) */
+.leaflet-pane {
+  z-index: 10 !important;
+}
+.leaflet-top,
+.leaflet-bottom {
+  z-index: 20 !important;
+}
+
+.custom-map-pin {
+  background: transparent !important;
+  border: none !important;
+  width: auto !important;
+  height: auto !important;
+  white-space: nowrap !important;
+  margin: 0 !important;
+}
+
+.custom-map-pin > div {
+  white-space: nowrap !important;
+}
+
+.density-map-pin {
+  background: transparent !important;
+  border: none !important;
+  width: auto !important;
+  height: auto !important;
+  white-space: nowrap !important;
+  margin: 0 !important;
+}
+
+.density-map-pin > div {
+  white-space: nowrap !important;
+}
+
+.user-location-pin {
+  background: transparent !important;
+  border: none !important;
+}
+
+/* Hide scrollbar for category tabs while allowing scroll */
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Print styles for QR Code badge */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  #qr-badge-card,
+  #qr-badge-card * {
+    visibility: visible;
+  }
+  #qr-badge-card {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    width: 90% !important;
+    max-width: 460px !important;
+    border: 2px solid #bca071 !important;
+    box-shadow: none !important;
+  }
+}
+
+/* Scoped Chat Conversation: Prevent text selection, copy menu & highlighting */
+#chat-messages-container,
+#chat-messages-container *,
+.chat-action-modal,
+.chat-action-modal * {
+  -webkit-user-select: none !important;
+  -moz-user-select: none !important;
+  -ms-user-select: none !important;
+  user-select: none !important;
+  -webkit-touch-callout: none !important;
+  -webkit-tap-highlight-color: transparent !important;
+}
+
+#chat-messages-container ::selection,
+#chat-messages-container *::selection,
+.chat-action-modal ::selection,
+.chat-action-modal *::selection {
+  background: transparent !important;
+  color: inherit !important;
+}
+

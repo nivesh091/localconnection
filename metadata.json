@@ -1,0 +1,9 @@
+{
+  "name": "KaamMitra — काम मित्र",
+  "description": "ग्रामीण और कस्बाई क्षेत्रों के लिए काम और सेवा प्रदाताओं का विश्वसनीय मंच | Reliable local service providers & services marketplace",
+  "requestFramePermissions": [
+    "geolocation",
+    "microphone"
+  ],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
