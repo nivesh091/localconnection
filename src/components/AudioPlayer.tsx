@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Play, Pause, RotateCcw, RotateCw, Volume2, AlertCircle, Download, Clock } from 'lucide-react';
+import { attachAudioLoudnessBooster } from '../services/audioEnhancer';
 
 interface AudioPlayerProps {
   src: string;
@@ -22,6 +23,9 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !src) return;
+
+    // Attach studio-grade audio loudness booster & limiter
+    attachAudioLoudnessBooster(audio, { gainMultiplier: 2.8 });
 
     setIsLoading(true);
     setHasError(false);
@@ -116,6 +120,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
+      attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: 2.8 });
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
         playPromise
@@ -196,7 +201,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           : 'bg-teal-50/70 border-teal-200/80 text-slate-900'
       }`}
     >
-      <audio ref={audioRef} src={src} preload="metadata" />
+      <audio ref={audioRef} src={src} preload="metadata" crossOrigin="anonymous" />
 
       {/* Header: Title + Time + Download */}
       <div className="flex items-center justify-between mb-2">

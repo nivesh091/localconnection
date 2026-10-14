@@ -2743,7 +2743,7 @@ export const AdminPage: React.FC = () => {
                           </button>
                           {playingVoiceId === hr.id && playingVoiceUrl && (
                             <div className="mt-2">
-                              <audio controls autoPlay src={playingVoiceUrl} className="w-full h-8" />
+                              <AudioPlayer src={playingVoiceUrl} title="आवाज संदेश" />
                             </div>
                           )}
                         </div>
@@ -2845,7 +2845,7 @@ export const AdminPage: React.FC = () => {
                           </button>
                           {playingVoiceId === wr.id && playingVoiceUrl && (
                             <div className="mt-2">
-                              <audio controls autoPlay src={playingVoiceUrl} className="w-full h-8" />
+                              <AudioPlayer src={playingVoiceUrl} title="आवाज संदेश" />
                             </div>
                           )}
                         </div>

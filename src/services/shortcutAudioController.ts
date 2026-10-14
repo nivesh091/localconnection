@@ -5,6 +5,8 @@
  * Resets playback to 0:00 only when a recording naturally finishes to the end.
  */
 
+import { attachAudioLoudnessBooster } from './audioEnhancer';
+
 type PlaybackListener = (activeId: string | null) => void;
 
 class ShortcutAudioController {
@@ -19,6 +21,10 @@ class ShortcutAudioController {
     if (typeof window !== 'undefined') {
       this.audio = new Audio();
       this.audio.preload = 'metadata';
+      this.audio.crossOrigin = 'anonymous';
+
+      // Attach studio-grade loudness booster and limiter
+      attachAudioLoudnessBooster(this.audio, { gainMultiplier: 2.8 });
 
       this.audio.addEventListener('ended', () => {
         if (this.activeId) {

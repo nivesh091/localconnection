@@ -87,10 +87,10 @@ export class ProfileService {
             } catch {}
 
             if (!found) {
-              // For normal users (or workers without skills metadata), check localStorage & user metadata
+              // For normal users (or workers without skills metadata), check safeStorage & user metadata
               if (typeof window !== 'undefined') {
                 try {
-                  const stored = localStorage.getItem(`kaammitra_mobile_public_${userId}`);
+                  const stored = safeStorage.getItem(`kaammitra_mobile_public_${userId}`);
                   if (stored !== null) {
                     isMobilePublic = stored === 'true';
                     found = true;
@@ -226,7 +226,7 @@ export class ProfileService {
       if (is_mobile_public !== undefined) {
         if (typeof window !== 'undefined') {
           try {
-            localStorage.setItem(`kaammitra_mobile_public_${userId}`, String(is_mobile_public));
+            safeStorage.setItem(`kaammitra_mobile_public_${userId}`, String(is_mobile_public));
           } catch {}
         }
         try {

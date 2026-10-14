@@ -4,11 +4,19 @@ import path from 'path';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
+let cachedBranding: { name: string; short_name: string } | null = null;
+let lastBrandingFetch = 0;
+
 async function getConfiguredBranding(): Promise<{ name: string; short_name: string }> {
   const fallback = {
     name: 'Talent',
     short_name: 'Talent',
   };
+
+  const now = Date.now();
+  if (cachedBranding && now - lastBrandingFetch < 60000) {
+    return cachedBranding;
+  }
 
   const supabaseUrl =
     process.env.VITE_SUPABASE_URL || 'https://hhvxanktvbncyeedzzdf.supabase.co';
@@ -28,6 +36,7 @@ async function getConfiguredBranding(): Promise<{ name: string; short_name: stri
           apikey: supabaseKey,
           Authorization: `Bearer ${supabaseKey}`,
         },
+        signal: AbortSignal.timeout(2000),
       }
     );
 
@@ -51,10 +60,13 @@ async function getConfiguredBranding(): Promise<{ name: string; short_name: stri
 
         if (en || hi) {
           const exactName = en || hi;
-          return {
+          const result = {
             name: exactName,
             short_name: exactName,
           };
+          cachedBranding = result;
+          lastBrandingFetch = now;
+          return result;
         }
       }
     }
@@ -62,6 +74,8 @@ async function getConfiguredBranding(): Promise<{ name: string; short_name: stri
     console.warn('[vite.config.ts] Failed to fetch Admin branding from Supabase:', err);
   }
 
+  cachedBranding = fallback;
+  lastBrandingFetch = now;
   return fallback;
 }
 
@@ -314,6 +328,10 @@ export default defineConfig(async () => {
     server: {
       host: '0.0.0.0',
       port: 3000,
+      cors: true,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+      },
       allowedHosts: true as const,
       // HMR is disabled in AI Studio via DISABLE_HMR env var.
       // Do not modify—file watching is disabled to prevent flickering during agent edits.
@@ -324,6 +342,10 @@ export default defineConfig(async () => {
     preview: {
       host: '0.0.0.0',
       port: 3000,
+      cors: true,
+      headers: {
+        'Access-Control-Allow-Origin': '*',
+      },
       allowedHosts: true as const,
     },
   };

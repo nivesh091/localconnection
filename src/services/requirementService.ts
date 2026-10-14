@@ -1,4 +1,5 @@
 import { supabase, isSchemaCacheError, formatError } from '../lib/supabase';
+import { safeStorage, safeSessionStorage } from '../lib/storage';
 import { Requirement, RequirementFilterState } from '../types';
 import { DistanceService } from './distanceService';
 
@@ -17,19 +18,13 @@ export function invalidateRequirementsCache(userId?: string): void {
     userRequirementsCache.delete(userId);
     userRequirementsInFlight.delete(userId);
     try {
-      sessionStorage.removeItem(`km_user_reqs_${userId}`);
+      safeSessionStorage.removeItem(`km_user_reqs_${userId}`);
     } catch {}
   } else {
     userRequirementsCache.clear();
     userRequirementsInFlight.clear();
     try {
-      // Clear all km_user_reqs keys from sessionStorage
-      for (let i = sessionStorage.length - 1; i >= 0; i--) {
-        const k = sessionStorage.key(i);
-        if (k && k.startsWith('km_user_reqs_')) {
-          sessionStorage.removeItem(k);
-        }
-      }
+      safeSessionStorage.clear();
     } catch {}
   }
   publicRequirementsCache.clear();
@@ -157,7 +152,7 @@ export class RequirementService {
     }
     // Check if admin has set a priority override locally
     try {
-      const savedOverride = localStorage.getItem(`admin_req_priority_${row.id}`);
+      const savedOverride = safeStorage.getItem(`admin_req_priority_${row.id}`);
       if (savedOverride !== null) {
         priorityPoints = Number(savedOverride) || 50;
       }
@@ -338,7 +333,7 @@ export class RequirementService {
       return inMem.data;
     }
     try {
-      const stored = sessionStorage.getItem(`km_user_reqs_${userId}`);
+      const stored = safeSessionStorage.getItem(`km_user_reqs_${userId}`);
       if (stored) {
         const parsed = JSON.parse(stored);
         if (Array.isArray(parsed)) {
@@ -365,10 +360,10 @@ export class RequirementService {
       return cached.data;
     }
 
-    // Check sessionStorage if memory cache was empty (e.g. after refresh)
+    // Check safeSessionStorage if memory cache was empty (e.g. after refresh)
     if (!cached) {
       try {
-        const stored = sessionStorage.getItem(`km_user_reqs_${userId}`);
+        const stored = safeSessionStorage.getItem(`km_user_reqs_${userId}`);
         if (stored) {
           const parsed = JSON.parse(stored);
           if (Array.isArray(parsed)) {
@@ -401,8 +396,8 @@ export class RequirementService {
         const formatted = (data || []).map((row: any) => RequirementService.formatRequirementRow(row));
         userRequirementsCache.set(cacheKey, { data: formatted, timestamp: Date.now() });
         try {
-          sessionStorage.setItem(`km_user_reqs_${userId}`, JSON.stringify(formatted));
-          localStorage.setItem('km_active_user_id', userId);
+          safeSessionStorage.setItem(`km_user_reqs_${userId}`, JSON.stringify(formatted));
+          safeStorage.setItem('km_active_user_id', userId);
         } catch {}
         return formatted;
       } catch (err) {

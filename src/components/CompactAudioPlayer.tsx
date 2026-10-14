@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Play, Pause, Square, RotateCcw, Volume2, Mic, Clock, AlertCircle } from 'lucide-react';
+import { attachAudioLoudnessBooster } from '../services/audioEnhancer';
 
 interface CompactAudioPlayerProps {
   src: string;
@@ -24,6 +25,9 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !src) return;
+
+    // Attach studio-grade audio loudness booster & limiter
+    attachAudioLoudnessBooster(audio, { gainMultiplier: 2.8 });
 
     setIsLoading(true);
     setHasError(false);
@@ -97,6 +101,7 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
       audioRef.current.pause();
       setIsPlaying(false);
     } else {
+      attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: 2.8 });
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
         playPromise
@@ -127,6 +132,7 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
     if (!audioRef.current) return;
     audioRef.current.currentTime = 0;
     setCurrentTime(0);
+    attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: 2.8 });
     const playPromise = audioRef.current.play();
     if (playPromise !== undefined) {
       playPromise
@@ -167,7 +173,7 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
       onClick={(e) => e.stopPropagation()}
       className={`bg-[#364f6b]/70 rounded-xl p-[2px] shadow-[0_3px_6px_rgba(0,0,0,0.08)] ${className}`}
     >
-      <audio ref={audioRef} src={src} preload="metadata" />
+      <audio ref={audioRef} src={src} preload="metadata" crossOrigin="anonymous" />
       <div className="bg-[#f4f7fb] rounded-[10px] py-1.5 sm:py-2 px-2.5 sm:px-3 flex items-center justify-between gap-2 shadow-[inset_0_2px_4px_rgba(0,0,0,0.04)]">
         {/* Left: Mic icon + Title + Live Time */}
         <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">

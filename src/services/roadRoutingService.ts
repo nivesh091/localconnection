@@ -52,20 +52,21 @@ function createCacheKey(origin: RoadCoordinate, destination: RoadCoordinate): st
   return `${oLat},${oLng}->${dLat},${dLng}`;
 }
 
+import { safeSessionStorage } from '../lib/storage';
+
 /**
  * Reads from sessionStorage safely (handling SSR or quota exceeded)
  */
 function readSessionCache(key: string): RoadDistanceResult | null {
-  if (typeof window === 'undefined' || !window.sessionStorage) return null;
   try {
-    const raw = sessionStorage.getItem(SESSION_CACHE_PREFIX + key);
+    const raw = safeSessionStorage.getItem(SESSION_CACHE_PREFIX + key);
     if (!raw) return null;
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed.timestamp === 'number') {
       if (Date.now() - parsed.timestamp < CACHE_TTL_MS) {
         return parsed.result;
       }
-      sessionStorage.removeItem(SESSION_CACHE_PREFIX + key);
+      safeSessionStorage.removeItem(SESSION_CACHE_PREFIX + key);
     }
   } catch {}
   return null;
@@ -75,9 +76,8 @@ function readSessionCache(key: string): RoadDistanceResult | null {
  * Writes to sessionStorage safely
  */
 function writeSessionCache(key: string, result: RoadDistanceResult): void {
-  if (typeof window === 'undefined' || !window.sessionStorage) return;
   try {
-    sessionStorage.setItem(
+    safeSessionStorage.setItem(
       SESSION_CACHE_PREFIX + key,
       JSON.stringify({ result, timestamp: Date.now() })
     );

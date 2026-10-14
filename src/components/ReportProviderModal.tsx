@@ -4,6 +4,7 @@ import { UserProfile, WorkerProfile } from '../types';
 import { useTranslation } from '../hooks/useTranslation';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
 import { ComplaintService } from '../services/complaintService';
+import { attachAudioLoudnessBooster } from '../services/audioEnhancer';
 
 export interface ReportProviderModalProps {
   isOpen: boolean;
@@ -165,6 +166,7 @@ export const ReportProviderModal: React.FC<ReportProviderModalProps> = ({
       audioPreviewRef.current.pause();
       setIsPlayingPreview(false);
     } else {
+      attachAudioLoudnessBooster(audioPreviewRef.current, { gainMultiplier: 2.8 });
       audioPreviewRef.current.play();
       setIsPlayingPreview(true);
     }
@@ -376,6 +378,7 @@ export const ReportProviderModal: React.FC<ReportProviderModalProps> = ({
                     <audio
                       ref={audioPreviewRef}
                       src={recordedUrl}
+                      crossOrigin="anonymous"
                       onEnded={() => setIsPlayingPreview(false)}
                       className="hidden"
                     />

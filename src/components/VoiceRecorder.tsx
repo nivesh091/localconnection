@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Mic, Square, Trash2, RotateCcw, Check, AlertCircle } from 'lucide-react';
 import { AudioPlayer } from './AudioPlayer';
+import { normalizeRecordedAudioBlob } from '../services/audioEnhancer';
 
 interface VoiceRecorderProps {
   onRecordingComplete?: (blob: Blob) => void;
@@ -65,7 +66,14 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
   const startRecording = async () => {
     setPermissionError(null);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      // Enable native hardware/software Auto Gain Control, noise suppression and echo cancellation
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+      });
       streamRef.current = stream;
       chunksRef.current = [];
 
@@ -80,15 +88,18 @@ export const VoiceRecorder: React.FC<VoiceRecorderProps> = ({
         }
       };
 
-      recorder.onstop = () => {
+      recorder.onstop = async () => {
         const finalType = recorder.mimeType || mimeType || 'audio/webm';
-        const blob = new Blob(chunksRef.current, { type: finalType });
-        const url = URL.createObjectURL(blob);
-        setRecordedBlob(blob);
+        const rawBlob = new Blob(chunksRef.current, { type: finalType });
+
+        // Normalize newly recorded audio to healthy, comfortably audible speech volume
+        const finalBlob = await normalizeRecordedAudioBlob(rawBlob);
+        const url = URL.createObjectURL(finalBlob);
+        setRecordedBlob(finalBlob);
         setRecordedUrl(url);
 
         // Inform listeners of the ready recording for preview
-        onRecordingChange?.(blob);
+        onRecordingChange?.(finalBlob);
 
         // Stop all audio tracks
         stream.getTracks().forEach((track) => track.stop());

@@ -4,7 +4,7 @@ import { UserProfile, WorkerProfile, UserLocation, WorkerMedia } from '../types'
 import { ProfileService } from '../services/profileService';
 import { WorkerService } from '../services/workerService';
 import { LocationService } from '../services/locationService';
-import { safeStorage } from '../lib/storage';
+import { safeStorage, safeSessionStorage } from '../lib/storage';
 
 interface AuthContextType {
   user: UserProfile | null;
@@ -100,15 +100,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           }
           try {
             safeStorage.setItem('km_cached_user_profile', JSON.stringify(profileVal));
-            localStorage.setItem('km_active_user_id', profileVal.id);
-            sessionStorage.setItem('km_active_user_id', profileVal.id);
+            safeStorage.setItem('km_active_user_id', profileVal.id);
+            safeSessionStorage.setItem('km_active_user_id', profileVal.id);
           } catch {}
           setUser(profileVal);
         } else if (!userRef.current && navigator.onLine) {
           try {
             safeStorage.removeItem('km_cached_user_profile');
-            localStorage.removeItem('km_active_user_id');
-            sessionStorage.removeItem('km_active_user_id');
+            safeStorage.removeItem('km_active_user_id');
+            safeSessionStorage.removeItem('km_active_user_id');
           } catch {}
           setUser(null);
         }
@@ -205,8 +205,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           safeStorage.removeItem('km_cached_user_profile');
           safeStorage.removeItem('km_cached_worker_profile');
           safeStorage.removeItem('km_cached_user_location');
-          localStorage.removeItem('km_active_user_id');
-          sessionStorage.removeItem('km_active_user_id');
+          safeStorage.removeItem('km_active_user_id');
+          safeSessionStorage.removeItem('km_active_user_id');
         } catch {}
         setUser(null);
         setWorkerProfile(null);
@@ -257,8 +257,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       safeStorage.removeItem('km_cached_user_profile');
       safeStorage.removeItem('km_cached_worker_profile');
       safeStorage.removeItem('km_cached_user_location');
-      localStorage.removeItem('km_active_user_id');
-      sessionStorage.removeItem('km_active_user_id');
+      safeStorage.removeItem('km_active_user_id');
+      safeSessionStorage.removeItem('km_active_user_id');
       await supabase.auth.signOut();
     } catch (err) {
       console.warn('SignOut warning:', err);

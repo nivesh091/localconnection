@@ -1,6 +1,7 @@
 import { supabase } from '../lib/supabase';
 import { Message } from '../types';
 import { brandingStore } from './brandingService';
+import { safeStorage } from '../lib/storage';
 
 export class NotificationService {
   private static notifiedMsgIds = new Set<string>();
@@ -32,7 +33,7 @@ export class NotificationService {
    */
   static hasDismissedPrompt(): boolean {
     if (typeof window === 'undefined') return true;
-    return !!localStorage.getItem('kaammitra_notification_dismissed');
+    return !!safeStorage.getItem('kaammitra_notification_dismissed');
   }
 
   /**
@@ -40,7 +41,7 @@ export class NotificationService {
    */
   static dismissPrompt(): void {
     if (typeof window !== 'undefined') {
-      localStorage.setItem('kaammitra_notification_dismissed', Date.now().toString());
+      safeStorage.setItem('kaammitra_notification_dismissed', Date.now().toString());
     }
   }
 
@@ -55,7 +56,7 @@ export class NotificationService {
     try {
       const permission = await Notification.requestPermission();
       if (permission === 'granted') {
-        localStorage.removeItem('kaammitra_notification_dismissed');
+        safeStorage.removeItem('kaammitra_notification_dismissed');
         await this.registerPushSubscription();
       } else if (permission === 'denied') {
         this.dismissPrompt();

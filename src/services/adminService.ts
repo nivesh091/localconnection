@@ -1,4 +1,5 @@
 import { supabase, ADMIN_EMAIL, ADMIN_CONTACT_DEFAULT, isSchemaCacheError } from '../lib/supabase';
+import { safeStorage } from '../lib/storage';
 import {
   UserProfile,
   WorkerProfile,
@@ -49,7 +50,7 @@ export class AdminService {
 
         let localReqMapOverride = false;
         try {
-          localReqMapOverride = localStorage.getItem('admin_show_requirements_on_map') === 'true';
+          localReqMapOverride = safeStorage.getItem('admin_show_requirements_on_map') === 'true';
         } catch {}
 
         if (error || !data) {
@@ -87,7 +88,7 @@ export class AdminService {
       } catch {
         let localReqMapOverride = false;
         try {
-          localReqMapOverride = localStorage.getItem('admin_show_requirements_on_map') === 'true';
+          localReqMapOverride = safeStorage.getItem('admin_show_requirements_on_map') === 'true';
         } catch {}
 
         if (cachedAdminSettings) return cachedAdminSettings.data;
@@ -129,7 +130,7 @@ export class AdminService {
     try {
       if (updates.show_requirements_on_map !== undefined) {
         try {
-          localStorage.setItem('admin_show_requirements_on_map', String(Boolean(updates.show_requirements_on_map)));
+          safeStorage.setItem('admin_show_requirements_on_map', String(Boolean(updates.show_requirements_on_map)));
         } catch {}
       }
 
@@ -373,7 +374,7 @@ export class AdminService {
 
       // Save local override so admin changes take effect immediately across all sessions
       try {
-        localStorage.setItem(`admin_req_priority_${requirementId}`, String(clamped));
+        safeStorage.setItem(`admin_req_priority_${requirementId}`, String(clamped));
       } catch {}
 
       // Update in Supabase database if column exists

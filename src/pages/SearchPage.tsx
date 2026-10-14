@@ -23,6 +23,7 @@ import { RequirementDetailModal } from '../components/RequirementDetailModal';
 import { RequirementFormModal } from '../components/RequirementFormModal';
 import { RequirementFilterModal } from '../components/RequirementFilterModal';
 import { LocationPickerValue } from '../components/LocationPicker';
+import { safeStorage, safeSessionStorage } from '../lib/storage';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
@@ -49,7 +50,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
   const effectiveUserId =
     user?.id ||
     (typeof window !== 'undefined'
-      ? localStorage.getItem('km_active_user_id') || sessionStorage.getItem('km_active_user_id')
+      ? safeStorage.getItem('km_active_user_id') || safeSessionStorage.getItem('km_active_user_id')
       : null);
 
   // User's Own Requirements State (Section 5) - synchronous 0ms cached initialization

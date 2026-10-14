@@ -1,5 +1,6 @@
 import { UserLocation } from '../types';
 import { localizePlaceName } from './locationTransliteration';
+import { safeSessionStorage } from '../lib/storage';
 
 export interface LocationStateItem {
   name: string;
@@ -1061,7 +1062,7 @@ export class LocationService {
   static getLastKnownPosition(): { latitude: number; longitude: number } | null {
     if (this.lastKnownPosition) return this.lastKnownPosition;
     try {
-      const stored = sessionStorage.getItem('kaammitra_last_coords');
+      const stored = safeSessionStorage.getItem('kaammitra_last_coords');
       if (stored) {
         const parsed = JSON.parse(stored);
         if (
@@ -1088,7 +1089,7 @@ export class LocationService {
     if (!isNaN(lat) && !isNaN(lng) && isFinite(lat) && isFinite(lng)) {
       this.lastKnownPosition = { latitude: lat, longitude: lng };
       try {
-        sessionStorage.setItem('kaammitra_last_coords', JSON.stringify({ latitude: lat, longitude: lng }));
+        safeSessionStorage.setItem('kaammitra_last_coords', JSON.stringify({ latitude: lat, longitude: lng }));
       } catch {
         // ignore
       }

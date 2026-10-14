@@ -3,6 +3,7 @@ import { Download, X, Smartphone, CheckCircle, HelpCircle } from 'lucide-react';
 import { usePWAInstall } from '../hooks/usePWAInstall';
 import { useTranslation } from '../hooks/useTranslation';
 import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
+import { safeStorage } from '../lib/storage';
 
 const DISMISS_KEY = 'kaammitra_pwa_popup_dismissed_at';
 const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -25,7 +26,7 @@ export const PWAInstallPopup: React.FC = () => {
     }
 
     // 2. Guard: Check if user dismissed prompt within cooldown period
-    const lastDismissed = localStorage.getItem(DISMISS_KEY);
+    const lastDismissed = safeStorage.getItem(DISMISS_KEY);
     if (lastDismissed && Date.now() - Number(lastDismissed) < DISMISS_COOLDOWN_MS) {
       return;
     }
@@ -42,7 +43,7 @@ export const PWAInstallPopup: React.FC = () => {
 
   const handleDismiss = () => {
     setIsOpen(false);
-    localStorage.setItem(DISMISS_KEY, Date.now().toString());
+    safeStorage.setItem(DISMISS_KEY, Date.now().toString());
   };
 
   const handleInstallClick = async () => {
