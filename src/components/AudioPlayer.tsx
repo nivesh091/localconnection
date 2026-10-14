@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Play, Pause, RotateCcw, RotateCw, Volume2, AlertCircle, Download, Clock } from 'lucide-react';
-import { attachAudioLoudnessBooster } from '../services/audioEnhancer';
+import { attachAudioLoudnessBooster, DEFAULT_GAIN_MULTIPLIER, resumeAudioContext } from '../services/audioEnhancer';
 
 interface AudioPlayerProps {
   src: string;
@@ -17,17 +17,16 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !src) return;
 
-    // Attach studio-grade audio loudness booster & limiter
-    attachAudioLoudnessBooster(audio, { gainMultiplier: 2.8 });
+    // Attach studio-grade audio loudness booster & limiter (+13.94 dB total / +5 dB extra)
+    attachAudioLoudnessBooster(audio, { gainMultiplier: DEFAULT_GAIN_MULTIPLIER });
 
-    setIsLoading(true);
     setHasError(false);
     setIsPlaying(false);
     setCurrentTime(0);
@@ -36,7 +35,6 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
         setDuration(audio.duration);
       }
-      setIsLoading(false);
       setHasError(false);
     };
 
@@ -44,9 +42,15 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       setCurrentTime(audio.currentTime);
     };
 
-    const handlePlay = () => {
+    // Replace loading indicator with Pause button only when audio actually starts outputting sound
+    const handlePlaying = () => {
       setIsPlaying(true);
       setIsLoading(false);
+      setHasError(false);
+    };
+
+    const handleWaiting = () => {
+      setIsLoading(true);
     };
 
     const handlePause = () => {
@@ -55,16 +59,8 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
 
     const handleEnded = () => {
       setIsPlaying(false);
-      setCurrentTime(0);
-    };
-
-    const handleWaiting = () => {
-      setIsLoading(true);
-    };
-
-    const handlePlaying = () => {
       setIsLoading(false);
-      setIsPlaying(true);
+      setCurrentTime(0);
     };
 
     const handleError = () => {
@@ -76,64 +72,62 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
     audio.addEventListener('loadedmetadata', handleReady);
     audio.addEventListener('canplay', handleReady);
     audio.addEventListener('canplaythrough', handleReady);
-    audio.addEventListener('loadeddata', handleReady);
     audio.addEventListener('durationchange', handleReady);
     audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('playing', handlePlaying);
+    audio.addEventListener('waiting', handleWaiting);
     audio.addEventListener('pause', handlePause);
     audio.addEventListener('ended', handleEnded);
-    audio.addEventListener('waiting', handleWaiting);
-    audio.addEventListener('playing', handlePlaying);
     audio.addEventListener('error', handleError);
 
-    // If audio is already ready in browser cache
     if (audio.readyState >= 1) {
       handleReady();
-    }
-
-    // Force browser to load the media resource with the new signed URL
-    try {
-      audio.load();
-    } catch {
-      // Ignored
     }
 
     return () => {
       audio.removeEventListener('loadedmetadata', handleReady);
       audio.removeEventListener('canplay', handleReady);
       audio.removeEventListener('canplaythrough', handleReady);
-      audio.removeEventListener('loadeddata', handleReady);
       audio.removeEventListener('durationchange', handleReady);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('playing', handlePlaying);
+      audio.removeEventListener('waiting', handleWaiting);
       audio.removeEventListener('pause', handlePause);
       audio.removeEventListener('ended', handleEnded);
-      audio.removeEventListener('waiting', handleWaiting);
-      audio.removeEventListener('playing', handlePlaying);
       audio.removeEventListener('error', handleError);
     };
   }, [src]);
 
   const togglePlay = () => {
     if (!audioRef.current || hasError) return;
+
+    // Requirement 6: While the same audio is loading, ignore repeated clicks
+    if (isLoading) {
+      return;
+    }
+
     if (isPlaying) {
       audioRef.current.pause();
       setIsPlaying(false);
+      setIsLoading(false);
     } else {
-      attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: 2.8 });
+      // Requirement 4: Immediately show visible loading indicator
+      setIsLoading(true);
+      setHasError(false);
+
+      // Unlock Web Audio API synchronously in user gesture
+      resumeAudioContext();
+      attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: DEFAULT_GAIN_MULTIPLIER });
+
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
-        playPromise
-          .then(() => {
-            setIsPlaying(true);
-            setIsLoading(false);
-          })
-          .catch((err) => {
-            console.warn('Audio play error:', err);
-            setHasError(true);
-            setIsPlaying(false);
-            setIsLoading(false);
-          });
+        playPromise.catch((err) => {
+          if (err.name === 'AbortError') return;
+          console.warn('[AudioPlayer] Audio play error:', err);
+          setHasError(true);
+          setIsPlaying(false);
+          setIsLoading(false);
+        });
       }
     }
   };
@@ -165,8 +159,16 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
       setIsLoading(true);
       try {
         audioRef.current.load();
+        const p = audioRef.current.play();
+        if (p !== undefined) {
+          p.catch(() => {
+            setIsLoading(false);
+            setHasError(true);
+          });
+        }
       } catch {
-        // Ignored
+        setIsLoading(false);
+        setHasError(true);
       }
     }
   };
@@ -201,7 +203,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
           : 'bg-teal-50/70 border-teal-200/80 text-slate-900'
       }`}
     >
-      <audio ref={audioRef} src={src} preload="metadata" crossOrigin="anonymous" />
+      <audio ref={audioRef} src={src} preload="auto" crossOrigin="anonymous" />
 
       {/* Header: Title + Time + Download */}
       <div className="flex items-center justify-between mb-2">
@@ -267,7 +269,7 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
               ? 'bg-emerald-700 text-white hover:bg-emerald-800 font-bold'
               : 'bg-teal-700 text-white hover:bg-teal-800'
           }`}
-          aria-label={isPlaying ? 'रोकें' : 'चलाएं'}
+          aria-label={isLoading ? 'लोड हो रहा है...' : isPlaying ? 'रोकें' : 'चलाएं'}
         >
           {isLoading ? (
             <Clock className="w-5 h-5 animate-spin" />

@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Play, Pause, Square, RotateCcw, Volume2, Mic, Clock, AlertCircle } from 'lucide-react';
-import { attachAudioLoudnessBooster } from '../services/audioEnhancer';
+import { attachAudioLoudnessBooster, DEFAULT_GAIN_MULTIPLIER, resumeAudioContext } from '../services/audioEnhancer';
 
 interface CompactAudioPlayerProps {
   src: string;
@@ -19,17 +19,17 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
   const [isPlaying, setIsPlaying] = useState(false);
   const [duration, setDuration] = useState(0);
   const [currentTime, setCurrentTime] = useState(0);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isLoading, setIsLoading] = useState(false);
   const [hasError, setHasError] = useState(false);
 
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !src) return;
 
-    // Attach studio-grade audio loudness booster & limiter
-    attachAudioLoudnessBooster(audio, { gainMultiplier: 2.8 });
+    // Attach studio-grade audio loudness booster & limiter (+13.94 dB total / +5 dB extra)
+    attachAudioLoudnessBooster(audio, { gainMultiplier: DEFAULT_GAIN_MULTIPLIER });
 
-    setIsLoading(true);
+    setIsLoading(false);
     setHasError(false);
     setIsPlaying(false);
     setCurrentTime(0);
@@ -38,7 +38,13 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
       if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
         setDuration(audio.duration);
       }
-      setIsLoading(false);
+      setHasError(false);
+    };
+
+    const handleCanPlay = () => {
+      if (audio.duration && !isNaN(audio.duration) && isFinite(audio.duration)) {
+        setDuration(audio.duration);
+      }
       setHasError(false);
     };
 
@@ -46,17 +52,24 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
       setCurrentTime(audio.currentTime);
     };
 
-    const handlePlay = () => {
+    const handlePlaying = () => {
       setIsPlaying(true);
       setIsLoading(false);
+      setHasError(false);
+    };
+
+    const handleWaiting = () => {
+      setIsLoading(true);
     };
 
     const handlePause = () => {
       setIsPlaying(false);
+      setIsLoading(false);
     };
 
     const handleEnded = () => {
       setIsPlaying(false);
+      setIsLoading(false);
       setCurrentTime(0);
     };
 
@@ -67,9 +80,11 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
     };
 
     audio.addEventListener('loadedmetadata', handleLoadedMetadata);
-    audio.addEventListener('canplay', handleLoadedMetadata);
+    audio.addEventListener('canplay', handleCanPlay);
+    audio.addEventListener('canplaythrough', handleCanPlay);
     audio.addEventListener('timeupdate', handleTimeUpdate);
-    audio.addEventListener('play', handlePlay);
+    audio.addEventListener('playing', handlePlaying);
+    audio.addEventListener('waiting', handleWaiting);
     audio.addEventListener('pause', handlePause);
     audio.addEventListener('ended', handleEnded);
     audio.addEventListener('error', handleError);
@@ -78,15 +93,13 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
       handleLoadedMetadata();
     }
 
-    try {
-      audio.load();
-    } catch {}
-
     return () => {
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
-      audio.removeEventListener('canplay', handleLoadedMetadata);
+      audio.removeEventListener('canplay', handleCanPlay);
+      audio.removeEventListener('canplaythrough', handleCanPlay);
       audio.removeEventListener('timeupdate', handleTimeUpdate);
-      audio.removeEventListener('play', handlePlay);
+      audio.removeEventListener('playing', handlePlaying);
+      audio.removeEventListener('waiting', handleWaiting);
       audio.removeEventListener('pause', handlePause);
       audio.removeEventListener('ended', handleEnded);
       audio.removeEventListener('error', handleError);
@@ -97,22 +110,29 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
     e.stopPropagation();
     if (!audioRef.current || hasError) return;
 
+    // Requirement 6: While the same audio is loading, ignore repeated clicks
+    if (isLoading) return;
+
     if (isPlaying) {
       audioRef.current.pause();
       setIsPlaying(false);
+      setIsLoading(false);
     } else {
-      attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: 2.8 });
+      // Requirement 4: Immediately show visible loading indicator
+      setIsLoading(true);
+      setHasError(false);
+      resumeAudioContext();
+      attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: DEFAULT_GAIN_MULTIPLIER });
+
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
         playPromise
-          .then(() => {
-            setIsPlaying(true);
-            setIsLoading(false);
-          })
           .catch((err) => {
-            console.warn('Audio play error:', err);
+            if (err.name === 'AbortError') return;
+            console.warn('[CompactAudioPlayer] Audio play error:', err);
             setHasError(true);
             setIsPlaying(false);
+            setIsLoading(false);
           });
       }
     }
@@ -124,6 +144,7 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
     audioRef.current.pause();
     audioRef.current.currentTime = 0;
     setIsPlaying(false);
+    setIsLoading(false);
     setCurrentTime(0);
   };
 
@@ -132,15 +153,37 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
     if (!audioRef.current) return;
     audioRef.current.currentTime = 0;
     setCurrentTime(0);
-    attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: 2.8 });
+    setIsLoading(true);
+    resumeAudioContext();
+    attachAudioLoudnessBooster(audioRef.current, { gainMultiplier: DEFAULT_GAIN_MULTIPLIER });
     const playPromise = audioRef.current.play();
     if (playPromise !== undefined) {
       playPromise
-        .then(() => {
-          setIsPlaying(true);
+        .catch((err) => {
+          if (err.name === 'AbortError') return;
           setIsLoading(false);
-        })
-        .catch(() => {});
+        });
+    }
+  };
+
+  const handleRetry = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!audioRef.current) return;
+    setHasError(false);
+    setIsLoading(true);
+    try {
+      audioRef.current.load();
+      resumeAudioContext();
+      const p = audioRef.current.play();
+      if (p !== undefined) {
+        p.catch(() => {
+          setIsLoading(false);
+          setHasError(true);
+        });
+      }
+    } catch {
+      setIsLoading(false);
+      setHasError(true);
     }
   };
 
@@ -162,6 +205,13 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
             <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
             <span className="text-[11px] font-medium">ऑडियो लोड नहीं हो सका</span>
           </div>
+          <button
+            type="button"
+            onClick={handleRetry}
+            className="px-2 py-0.5 bg-amber-200 hover:bg-amber-300 text-amber-900 rounded-md text-[11px] font-bold transition cursor-pointer"
+          >
+            पुनः प्रयास
+          </button>
         </div>
       </div>
     );
@@ -173,7 +223,7 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
       onClick={(e) => e.stopPropagation()}
       className={`bg-[#364f6b]/70 rounded-xl p-[2px] shadow-[0_3px_6px_rgba(0,0,0,0.08)] ${className}`}
     >
-      <audio ref={audioRef} src={src} preload="metadata" crossOrigin="anonymous" />
+      <audio ref={audioRef} src={src} preload="auto" crossOrigin="anonymous" />
       <div className="bg-[#f4f7fb] rounded-[10px] py-1.5 sm:py-2 px-2.5 sm:px-3 flex items-center justify-between gap-2 shadow-[inset_0_2px_4px_rgba(0,0,0,0.04)]">
         {/* Left: Mic icon + Title + Live Time */}
         <div className="flex items-center gap-1.5 sm:gap-2 min-w-0 flex-1">
@@ -216,8 +266,12 @@ export const CompactAudioPlayer: React.FC<CompactAudioPlayerProps> = ({
           <button
             type="button"
             onClick={togglePlay}
-            title={isPlaying ? 'रोकें (Pause)' : 'चलाएं (Play)'}
-            className="w-7 h-7 rounded-full bg-gradient-to-b from-[#2d4a70] to-[#1b3252] text-white flex items-center justify-center shadow-xs hover:brightness-110 active:scale-95 transition cursor-pointer"
+            disabled={isLoading}
+            aria-label={isLoading ? 'लोड हो रहा है...' : isPlaying ? 'रोकें' : 'चलाएं'}
+            title={isLoading ? 'लोड हो रहा है...' : isPlaying ? 'रोकें (Pause)' : 'चलाएं (Play)'}
+            className={`w-7 h-7 rounded-full bg-gradient-to-b from-[#2d4a70] to-[#1b3252] text-white flex items-center justify-center shadow-xs hover:brightness-110 active:scale-95 transition ${
+              isLoading ? 'cursor-wait opacity-90' : 'cursor-pointer'
+            }`}
           >
             {isLoading ? (
               <Clock className="w-3.5 h-3.5 animate-spin" />

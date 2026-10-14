@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Phone, MessageSquare, MapPin, Play, Pause, QrCode } from 'lucide-react';
+import { Phone, MessageSquare, MapPin, Play, Pause, QrCode, Clock, RotateCcw } from 'lucide-react';
 import { WorkerProfile, getPriceUnitLabel } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -46,7 +46,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
   // Audio Shortcut Integration (Home Screen Worker Cards)
   const audioUrl = worker.voice_recording?.public_url || null;
   const hasAudio = Boolean(showAudioShortcut && audioUrl);
-  const { isPlaying, toggleAudio } = useShortcutAudio(worker.user_id);
+  const { isPlaying, isLoading, hasError, toggleAudio, preloadAudio } = useShortcutAudio(worker.user_id);
 
   // 1. Worker Name from real profile data
   const profile = worker.profile;
@@ -480,11 +480,36 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                     <button
                       type="button"
                       onClick={(e) => toggleAudio(audioUrl, e)}
-                      aria-label={isPlaying ? 'Pause audio' : 'Play audio'}
-                      title={isPlaying ? (lang === 'hi' ? 'रोकें (Pause)' : 'Pause') : (lang === 'hi' ? 'सुनें (Play)' : 'Play')}
-                      className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-b from-[#fef3c7] to-[#fde68a] border border-[#d97706]/40 text-[#92400e] hover:brightness-105 active:scale-95 flex items-center justify-center shadow-xs transition cursor-pointer select-none"
+                      onMouseEnter={() => preloadAudio(audioUrl)}
+                      onTouchStart={() => preloadAudio(audioUrl)}
+                      disabled={isLoading}
+                      aria-label={
+                        isLoading
+                          ? (lang === 'hi' ? 'ऑडियो लोड हो रहा है...' : 'Loading audio...')
+                          : isPlaying
+                          ? 'Pause audio'
+                          : 'Play audio'
+                      }
+                      title={
+                        hasError
+                          ? (lang === 'hi' ? 'पुनः प्रयास करें' : 'Retry')
+                          : isLoading
+                          ? (lang === 'hi' ? 'लोड हो रहा है...' : 'Loading...')
+                          : isPlaying
+                          ? (lang === 'hi' ? 'रोकें (Pause)' : 'Pause')
+                          : (lang === 'hi' ? 'सुनें (Play)' : 'Play')
+                      }
+                      className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center shadow-xs transition select-none ${
+                        hasError
+                          ? 'bg-rose-100 border border-rose-400 text-rose-700 hover:bg-rose-200'
+                          : 'bg-gradient-to-b from-[#fef3c7] to-[#fde68a] border border-[#d97706]/40 text-[#92400e] hover:brightness-105 active:scale-95'
+                      } ${isLoading ? 'cursor-wait opacity-90' : 'cursor-pointer'}`}
                     >
-                      {isPlaying ? (
+                      {isLoading ? (
+                        <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#92400e] animate-spin" />
+                      ) : hasError ? (
+                        <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-rose-700" />
+                      ) : isPlaying ? (
                         <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current text-[#92400e]" />
                       ) : (
                         <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current text-[#92400e] ml-0.5" />

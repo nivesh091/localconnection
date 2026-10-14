@@ -1,10 +1,10 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { X, Mic, Square, Trash2, Play, Pause, AlertCircle, CheckCircle2, Loader2, Volume2 } from 'lucide-react';
+import { X, Mic, Square, Trash2, Play, Pause, AlertCircle, CheckCircle2, Loader2, Volume2, Clock } from 'lucide-react';
 import { UserProfile, WorkerProfile } from '../types';
 import { useTranslation } from '../hooks/useTranslation';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
 import { ComplaintService } from '../services/complaintService';
-import { attachAudioLoudnessBooster } from '../services/audioEnhancer';
+import { attachAudioLoudnessBooster, DEFAULT_GAIN_MULTIPLIER, resumeAudioContext } from '../services/audioEnhancer';
 
 export interface ReportProviderModalProps {
   isOpen: boolean;
@@ -35,6 +35,8 @@ export const ReportProviderModal: React.FC<ReportProviderModalProps> = ({
 
   // Audio playback preview state
   const [isPlayingPreview, setIsPlayingPreview] = useState(false);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(false);
+  const [previewError, setPreviewError] = useState(false);
   const audioPreviewRef = useRef<HTMLAudioElement | null>(null);
 
   // Submission states
@@ -158,17 +160,31 @@ export const ReportProviderModal: React.FC<ReportProviderModalProps> = ({
     setRecordSeconds(0);
     setIsRecording(false);
     setIsPlayingPreview(false);
+    setIsPreviewLoading(false);
+    setPreviewError(false);
   };
 
   const togglePreviewPlay = () => {
-    if (!audioPreviewRef.current) return;
+    if (!audioPreviewRef.current || isPreviewLoading) return;
     if (isPlayingPreview) {
       audioPreviewRef.current.pause();
       setIsPlayingPreview(false);
+      setIsPreviewLoading(false);
     } else {
-      attachAudioLoudnessBooster(audioPreviewRef.current, { gainMultiplier: 2.8 });
-      audioPreviewRef.current.play();
-      setIsPlayingPreview(true);
+      setIsPreviewLoading(true);
+      setPreviewError(false);
+      resumeAudioContext();
+      attachAudioLoudnessBooster(audioPreviewRef.current, { gainMultiplier: DEFAULT_GAIN_MULTIPLIER });
+      const p = audioPreviewRef.current.play();
+      if (p !== undefined) {
+        p.catch((err) => {
+          if (err.name === 'AbortError') return;
+          console.warn('[ReportProviderModal] Preview play error:', err);
+          setIsPlayingPreview(false);
+          setIsPreviewLoading(false);
+          setPreviewError(true);
+        });
+      }
     }
   };
 
@@ -378,19 +394,53 @@ export const ReportProviderModal: React.FC<ReportProviderModalProps> = ({
                     <audio
                       ref={audioPreviewRef}
                       src={recordedUrl}
+                      preload="auto"
                       crossOrigin="anonymous"
-                      onEnded={() => setIsPlayingPreview(false)}
+                      onPlaying={() => {
+                        setIsPlayingPreview(true);
+                        setIsPreviewLoading(false);
+                        setPreviewError(false);
+                      }}
+                      onWaiting={() => setIsPreviewLoading(true)}
+                      onPause={() => {
+                        setIsPlayingPreview(false);
+                        setIsPreviewLoading(false);
+                      }}
+                      onEnded={() => {
+                        setIsPlayingPreview(false);
+                        setIsPreviewLoading(false);
+                      }}
+                      onError={() => {
+                        setIsPlayingPreview(false);
+                        setIsPreviewLoading(false);
+                        setPreviewError(true);
+                      }}
                       className="hidden"
                     />
+
+                    {previewError && (
+                      <p className="text-[11px] text-rose-600 font-medium">
+                        {lang === 'hi' ? 'ऑडियो नहीं चल सका। पुनः प्रयास करें।' : 'Could not play audio. Please retry.'}
+                      </p>
+                    )}
 
                     {/* Playback & Delete Controls */}
                     <div className="flex items-center gap-3">
                       <button
                         type="button"
                         onClick={togglePreviewPlay}
-                        className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition cursor-pointer shadow-xs"
+                        disabled={isPreviewLoading}
+                        aria-label={isPreviewLoading ? 'लोड हो रहा है...' : isPlayingPreview ? 'रोकें' : 'चलाएं'}
+                        className={`px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-bold flex items-center gap-2 transition shadow-xs ${
+                          isPreviewLoading ? 'cursor-wait opacity-90' : 'cursor-pointer'
+                        }`}
                       >
-                        {isPlayingPreview ? (
+                        {isPreviewLoading ? (
+                          <>
+                            <Clock className="w-3.5 h-3.5 animate-spin text-white" />
+                            <span>{lang === 'hi' ? 'लोड हो रहा है...' : 'Loading...'}</span>
+                          </>
+                        ) : isPlayingPreview ? (
                           <>
                             <Pause className="w-3.5 h-3.5 fill-white" />
                             <span>{lang === 'hi' ? 'रोकें' : 'Pause'}</span>

@@ -50,14 +50,24 @@ interface EnhancedNodes {
 const enhancedAudioElements = new WeakMap<HTMLAudioElement, EnhancedNodes>();
 
 /**
+ * Standard Gain Multiplier: 4.98x
+ * Mathematical conversion: 20 * log10(4.98) = +13.94 dB
+ * Exactly +5.00 dB additional gain beyond the previous 2.8x (+8.94 dB) enhanced output.
+ */
+export const DEFAULT_GAIN_MULTIPLIER = 4.98;
+
+/**
  * Attaches a studio-grade loudness booster and limiter to an HTMLAudioElement.
  * Boosts voice clarity and loudness noticeably while strictly preventing clipping or distortion.
+ * Uses WeakMap tracking to guarantee no duplicate gain application when called repeatedly.
  */
 export function attachAudioLoudnessBooster(
   audio: HTMLAudioElement | null,
   options: { gainMultiplier?: number } = {}
 ): void {
   if (!audio || typeof window === 'undefined') return;
+
+  const gainValue = options.gainMultiplier ?? DEFAULT_GAIN_MULTIPLIER;
 
   // Set anonymous CORS so Web Audio API can process remote storage streams without muting
   if (!audio.crossOrigin) {
@@ -66,12 +76,10 @@ export function attachAudioLoudnessBooster(
     } catch {}
   }
 
-  // Already enhanced: ensure audio context is ready on play
+  // Already enhanced: prevent duplicate gain nodes and update gain value if needed
   if (enhancedAudioElements.has(audio)) {
     const existing = enhancedAudioElements.get(audio)!;
-    if (options.gainMultiplier !== undefined) {
-      existing.gain.gain.setValueAtTime(options.gainMultiplier, existing.gain.context.currentTime);
-    }
+    existing.gain.gain.setValueAtTime(gainValue, existing.gain.context.currentTime);
     return;
   }
 
@@ -79,12 +87,10 @@ export function attachAudioLoudnessBooster(
   if (!ctx) return;
 
   try {
-    const gainValue = options.gainMultiplier ?? 2.8; // ~ +9 dB clean amplification
-
     // 1. Media Element Source Node
     const sourceNode = ctx.createMediaElementSource(audio);
 
-    // 2. High-headroom Gain Node for noticeable loudness boost
+    // 2. High-headroom Gain Node with +5dB extra loudness boost (+13.94 dB total)
     const gainNode = ctx.createGain();
     gainNode.gain.setValueAtTime(gainValue, ctx.currentTime);
 
@@ -93,7 +99,7 @@ export function attachAudioLoudnessBooster(
     const compressor = ctx.createDynamicsCompressor();
     compressor.threshold.setValueAtTime(-6.0, ctx.currentTime); // Start gentle compression at -6dB
     compressor.knee.setValueAtTime(12.0, ctx.currentTime);       // Soft knee for natural human speech
-    compressor.ratio.setValueAtTime(16.0, ctx.currentTime);      // Firm limiter ratio to keep peaks strictly below 0dB
+    compressor.ratio.setValueAtTime(20.0, ctx.currentTime);      // Maximum brickwall limiter ratio (20:1) to keep peaks strictly below 0dB
     compressor.attack.setValueAtTime(0.003, ctx.currentTime);    // 3ms fast attack to catch plosives/peaks
     compressor.release.setValueAtTime(0.20, ctx.currentTime);    // 200ms smooth release
 
@@ -102,7 +108,7 @@ export function attachAudioLoudnessBooster(
     gainNode.connect(compressor);
     compressor.connect(ctx.destination);
 
-    // Record in WeakMap
+    // Record in WeakMap to prevent duplicate gain node creation
     enhancedAudioElements.set(audio, {
       source: sourceNode,
       gain: gainNode,

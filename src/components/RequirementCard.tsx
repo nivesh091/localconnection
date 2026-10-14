@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Edit3, Trash2, Play, Pause } from 'lucide-react';
+import { Edit3, Trash2, Play, Pause, MapPin, Clock, RotateCcw } from 'lucide-react';
 import { Requirement } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
@@ -43,7 +43,7 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
       ? RequirementService.getVoicePublicUrl(requirement.voice_storage_path)
       : null);
   const hasAudio = Boolean(showAudioShortcut && audioUrl);
-  const { isPlaying, toggleAudio } = useShortcutAudio(requirement.id);
+  const { isPlaying, isLoading, hasError, toggleAudio, preloadAudio } = useShortcutAudio(requirement.id);
 
   // 1. Profile information of the requirement owner
   const owner = requirement.owner;
@@ -235,6 +235,80 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
     };
   }, [userCoordinates?.lat, userCoordinates?.lng, targetRequirementCoord?.lat, targetRequirementCoord?.lng, lang]);
 
+  // Fix 2: Dynamically resolve Tehsil if not stored directly (reusing existing authoritative logic from RequirementDetailModal)
+  const [resolvedTehsil, setResolvedTehsil] = useState<string>('');
+
+  useEffect(() => {
+    if (!requirement?.place) {
+      setResolvedTehsil('');
+      return;
+    }
+    const directTehsil =
+      requirement.subdistrict ||
+      requirement.tehsil ||
+      requirement.location?.landmark ||
+      requirement.location?.subdistrict;
+    if (directTehsil && directTehsil.trim()) {
+      setResolvedTehsil(directTehsil.trim());
+      return;
+    }
+    let cancelled = false;
+    LocationService.findSubdistrictForVillage(
+      requirement.state,
+      requirement.district,
+      requirement.place
+    ).then((tehsil) => {
+      if (!cancelled && tehsil) {
+        setResolvedTehsil(tehsil);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    requirement?.place,
+    requirement?.district,
+    requirement?.state,
+    requirement?.subdistrict,
+    requirement?.tehsil,
+    requirement?.location?.landmark,
+    requirement?.location?.subdistrict,
+  ]);
+
+  // Fix 2: Strict format: गाँव: VALUE, तहसील: VALUE, जिला: VALUE, राज्य: VALUE (reusing authoritative LocationService.formatWorkerCard)
+  const locationText = useMemo(() => {
+    if (!requirement) return '';
+    const hasAnyLoc = Boolean(
+      requirement.place ||
+      requirement.district ||
+      requirement.state ||
+      requirement.subdistrict ||
+      requirement.tehsil ||
+      requirement.location
+    );
+    if (!hasAnyLoc) return '';
+
+    const locObj = {
+      place: requirement.place || requirement.location?.place || '',
+      village: requirement.place || requirement.location?.village || '',
+      subdistrict:
+        requirement.subdistrict ||
+        requirement.tehsil ||
+        requirement.location?.landmark ||
+        requirement.location?.subdistrict ||
+        resolvedTehsil,
+      tehsil:
+        requirement.subdistrict ||
+        requirement.tehsil ||
+        requirement.location?.landmark ||
+        requirement.location?.subdistrict ||
+        resolvedTehsil,
+      district: requirement.district || requirement.location?.district || '',
+      state: requirement.state || requirement.location?.state || '',
+    };
+    return LocationService.formatWorkerCard(locObj, '', lang);
+  }, [requirement, resolvedTehsil, lang]);
+
   const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     onEdit?.(requirement);
@@ -333,11 +407,36 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
                 <button
                   type="button"
                   onClick={(e) => toggleAudio(audioUrl, e)}
-                  aria-label={isPlaying ? 'Pause audio' : 'Play audio'}
-                  title={isPlaying ? (lang === 'hi' ? 'रोकें (Pause)' : 'Pause') : (lang === 'hi' ? 'सुनें (Play)' : 'Play')}
-                  className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-b from-[#fef3c7] to-[#fde68a] border border-[#d97706]/40 text-[#92400e] hover:brightness-105 active:scale-95 flex items-center justify-center shadow-xs transition cursor-pointer select-none"
+                  onMouseEnter={() => preloadAudio(audioUrl)}
+                  onTouchStart={() => preloadAudio(audioUrl)}
+                  disabled={isLoading}
+                  aria-label={
+                    isLoading
+                      ? (lang === 'hi' ? 'ऑडियो लोड हो रहा है...' : 'Loading audio...')
+                      : isPlaying
+                      ? 'Pause audio'
+                      : 'Play audio'
+                  }
+                  title={
+                    hasError
+                      ? (lang === 'hi' ? 'पुनः प्रयास करें' : 'Retry')
+                      : isLoading
+                      ? (lang === 'hi' ? 'लोड हो रहा है...' : 'Loading...')
+                      : isPlaying
+                      ? (lang === 'hi' ? 'रोकें (Pause)' : 'Pause')
+                      : (lang === 'hi' ? 'सुनें (Play)' : 'Play')
+                  }
+                  className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center shadow-xs transition select-none ${
+                    hasError
+                      ? 'bg-rose-100 border border-rose-400 text-rose-700 hover:bg-rose-200'
+                      : 'bg-gradient-to-b from-[#fef3c7] to-[#fde68a] border border-[#d97706]/40 text-[#92400e] hover:brightness-105 active:scale-95'
+                  } ${isLoading ? 'cursor-wait opacity-90' : 'cursor-pointer'}`}
                 >
-                  {isPlaying ? (
+                  {isLoading ? (
+                    <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#92400e] animate-spin" />
+                  ) : hasError ? (
+                    <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-rose-700" />
+                  ) : isPlaying ? (
                     <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current text-[#92400e]" />
                   ) : (
                     <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current text-[#92400e] ml-0.5" />
@@ -381,6 +480,18 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
             </span>
           </div>
         </div>
+
+        {/* Fix 2: Existing Location Display at Bottom of Requirement Card */}
+        {locationText ? (
+          <div className="bg-[#cbd5e1] rounded-xl p-[1.5px] shadow-2xs">
+            <div className="bg-[#f1f5f9] rounded-[10px] py-1.5 px-2.5 flex items-start gap-1.5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.03)]">
+              <MapPin className="w-3.5 h-3.5 text-[#2b4468] shrink-0 mt-0.5" />
+              <span className="text-[11.5px] sm:text-xs font-medium text-[#1e293b] min-w-0 flex-1 whitespace-normal break-words leading-snug">
+                {locationText}
+              </span>
+            </div>
+          </div>
+        ) : null}
 
         {/* Optional Edit / Delete controls for own requirements view */}
         {isOwnRequirement && (
