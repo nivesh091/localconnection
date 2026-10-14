@@ -1,8 +1,11 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import { fileURLToPath } from 'url';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let cachedBranding: { name: string; short_name: string } | null = null;
 let lastBrandingFetch = 0;
@@ -163,6 +166,28 @@ export default defineConfig(async () => {
                   res.end(JSON.stringify({ error: err?.message || 'Failed to sync icons' }));
                 }
               });
+              return;
+            }
+
+            if (url === '/api/push/vapid-public-key' && req.method === 'GET') {
+              const publicKey =
+                process.env.VAPID_PUBLIC_KEY ||
+                process.env.VITE_VAPID_PUBLIC_KEY ||
+                'BIj-hKqgD1VNvcGsg_3Z5zzyBE57jQoTfJ6EDMGZ6k9n99d1EUxKO9G6k_HxCyrUFi9kXXP_raZu9Qyv2y2M0o0';
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ publicKey }));
+              return;
+            }
+
+            if (url === '/api/push/subscribe' && req.method === 'POST') {
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: true }));
+              return;
+            }
+
+            if (url === '/api/push/unsubscribe' && req.method === 'POST') {
+              res.setHeader('Content-Type', 'application/json');
+              res.end(JSON.stringify({ success: true }));
               return;
             }
 

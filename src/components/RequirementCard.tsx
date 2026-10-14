@@ -463,17 +463,17 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
             </span>
             <span style={{ fontSize: '14px' }} className="font-bold text-slate-800">
               {roadDistanceResult?.success ? (
-                <span>{roadDistanceResult.formattedCardDistance}</span>
+                <span style={{ marginLeft: '0px' }}>{roadDistanceResult.formattedCardDistance}</span>
               ) : isCalculatingRoad ? (
-                <span className="text-slate-500 font-medium text-xs">
+                <span style={{ marginLeft: '0px' }} className="text-slate-500 font-medium text-xs">
                   {lang === 'hi' ? 'दूरी लोड हो रही है...' : 'Calculating distance...'}
                 </span>
               ) : userCoordinates && targetRequirementCoord ? (
-                <span className="text-slate-500 font-medium text-[11px] sm:text-xs">
+                <span style={{ marginLeft: '0px' }} className="text-slate-500 font-medium text-[11px] sm:text-xs">
                   {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
                 </span>
               ) : (
-                <span className="text-slate-400 font-medium text-xs">
+                <span style={{ marginLeft: '0px' }} className="text-slate-400 font-medium text-xs">
                   {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
                 </span>
               )}
@@ -486,7 +486,10 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
           <div className="bg-[#cbd5e1] rounded-xl p-[1.5px] shadow-2xs">
             <div className="bg-[#f1f5f9] rounded-[10px] py-1.5 px-2.5 flex items-start gap-1.5 shadow-[inset_0_1px_2px_rgba(0,0,0,0.03)]">
               <MapPin className="w-3.5 h-3.5 text-[#2b4468] shrink-0 mt-0.5" />
-              <span className="text-[11.5px] sm:text-xs font-medium text-[#1e293b] min-w-0 flex-1 whitespace-normal break-words leading-snug">
+              <span
+                style={{ fontSize: '13px' }}
+                className="text-[11.5px] sm:text-xs font-medium text-[#1e293b] min-w-0 flex-1 whitespace-normal break-words leading-snug"
+              >
                 {locationText}
               </span>
             </div>
