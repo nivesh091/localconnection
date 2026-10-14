@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+html, body, input, button, select, textarea {
+  font-family: 'Plus Jakarta Sans', 'Noto Sans Devanagari', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+}
+
 /* Leaflet map custom pin styles and isolated stacking context */
 .leaflet-container {
   font-family: inherit;

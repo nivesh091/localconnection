@@ -235,6 +235,19 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
     };
   }, [userCoordinates?.lat, userCoordinates?.lng, targetWorkerCoord?.lat, targetWorkerCoord?.lng, lang]);
 
+  // Formatted dynamic distance value according to selected language (e.g., "17.4 कि.मी." or "17.4 KM")
+  const displayDistance = useMemo(() => {
+    if (
+      !roadDistanceResult?.success ||
+      roadDistanceResult.distanceKm === null ||
+      roadDistanceResult.distanceKm === undefined ||
+      isNaN(roadDistanceResult.distanceKm)
+    ) {
+      return null;
+    }
+    return RoadRoutingService.formatCardDistance(roadDistanceResult.distanceKm, lang);
+  }, [roadDistanceResult, lang]);
+
   const handleMessageClick = (e: React.MouseEvent) => {
     e.stopPropagation();
     if (!user) {
@@ -263,7 +276,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
       {/* Outer Card with Gold Rim and 3D Skeuomorphic Bevel */}
       <div
         onClick={() => onOpenDetail(worker)}
-        className="w-full bg-[#bca071] rounded-[28px] sm:rounded-[32px] p-[4px] sm:p-[5px] shadow-[0_12px_28px_rgba(0,0,0,0.2),inset_0_3px_5px_rgba(255,255,255,0.6),inset_0_-3px_5px_rgba(0,0,0,0.25)] hover:shadow-[0_16px_34px_rgba(0,0,0,0.28)] transition-all duration-200 cursor-pointer select-none relative"
+        className="w-full bg-[#bca071] rounded-[28px] sm:rounded-[32px] p-[4px] sm:p-[5px] shadow-[0_12px_28px_rgba(0,0,0,0.2),inset_0_2px_4px_rgba(255,255,255,0.7),inset_0_-2px_4px_rgba(0,0,0,0.4)] transition-all duration-200 cursor-pointer text-left relative overflow-hidden active:scale-[0.995]"
       >
         {/* Notice toast if number is private / unavailable */}
         {callNotice && (
@@ -273,12 +286,12 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
         )}
 
         {/* Inner Card Container */}
-        <div className={`bg-[#f4f6f5] rounded-[24px] sm:rounded-[27px] pt-2 sm:pt-2.5 pb-3 sm:pb-3.5 px-3.5 sm:px-5 shadow-[inset_0_0_12px_rgba(0,0,0,0.04)] flex flex-col justify-between gap-1.5 sm:gap-2 ${
+        <div className={`bg-[#fcfaf7] rounded-[24px] sm:rounded-[27px] pt-3 pb-3.5 px-3.5 sm:px-4 flex flex-col justify-between gap-2 relative overflow-hidden ${
           hideActions ? 'min-h-0' : 'min-h-[195px]'
         }`}>
           {/* Header Row: Profile Photo, Center Details (Name & Category), Right Price Tag */}
-          <div className="relative flex items-center justify-between gap-2.5 sm:gap-3 min-h-[64px] sm:min-h-[70px]">
-            {/* Left: Circular Profile Photo with Gold Bevel Rim */}
+          <div className="relative flex items-center justify-between gap-2.5 sm:gap-3 min-h-[58px] sm:min-h-[64px]">
+            {/* Left: Circular Profile Photo with Gold Rim */}
             <div className="shrink-0 z-10">
               <div
                 onClick={(e) => {
@@ -289,12 +302,12 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                     setShowPhotoViewer(true);
                   }
                 }}
-                className={`w-16 h-16 sm:w-20 sm:h-20 rounded-full bg-[#bca071] p-[3px] shadow-[0_6px_12px_rgba(0,0,0,0.18),inset_0_2px_4px_rgba(255,255,255,0.7)] ${
+                className={`w-14 h-14 sm:w-16 sm:h-16 rounded-full bg-[#bca071] p-[2px] shadow-xs ${
                   photo || isOwnProfile ? 'cursor-pointer hover:opacity-95 active:scale-95 transition' : ''
                 }`}
                 title={isOwnProfile ? (lang === 'hi' ? 'फ़ोटो देखें / संपादित करें' : 'View / Edit Photo') : photo ? (lang === 'hi' ? 'फ़ोटो देखें' : 'View Photo') : undefined}
               >
-                <div className="w-full h-full rounded-full overflow-hidden bg-slate-600 flex items-center justify-center text-white font-bold text-xl sm:text-2xl shadow-[inset_0_3px_6px_rgba(0,0,0,0.4)]">
+                <div className="w-full h-full rounded-full overflow-hidden bg-slate-100 flex items-center justify-center text-[#8a734d] font-bold text-lg sm:text-xl shadow-inner">
                   {photo ? (
                     <img
                       src={photo}
@@ -311,11 +324,11 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
 
             {/* Center: Real Worker Name with True Dynamic Auto-fit Font Size & Verification Logo + Real Category
                 Horizontally centered relative to the ENTIRE CARD with padding to clear left photo and right wage tag */}
-            <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-[72px] sm:px-[88px] pointer-events-none">
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-center px-[68px] sm:px-[80px] pointer-events-none">
               <div className="max-w-full text-center pointer-events-auto">
                 <h2
                   style={nameStyle}
-                  className="font-bold text-[#222b31] tracking-tight inline-flex items-center justify-center max-w-full leading-tight"
+                  className="font-bold text-slate-900 tracking-tight inline-flex items-center justify-center max-w-full leading-tight"
                 >
                   <span
                     className="truncate"
@@ -357,15 +370,21 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
 
               {/* Real Worker Category centered directly below name */}
               {!isNormalUser && (
-                <div className="mt-1 sm:mt-1.5 flex justify-center max-w-full pointer-events-auto">
+                <div className="mt-1 flex justify-center max-w-full pointer-events-auto">
                   <span
-                    className="inline-flex items-center justify-center border border-[#bca071] bg-[#f2c7d6] text-[#2d3748] rounded-full px-[15px] pt-[3px] pb-[6px] ml-0 mt-0 text-[18px] font-semibold tracking-tight leading-none text-center max-w-full break-words shadow-[0_1px_2px_rgba(0,0,0,0.04)]"
                     style={{
+                      backgroundColor: '#dee9ec',
+                      borderColor: '#080005',
+                      color: '#000000',
+                      paddingLeft: '12px',
+                      paddingTop: '2px',
+                      paddingBottom: '3px',
+                      marginTop: '-4px',
+                      marginBottom: '-12px',
                       marginLeft: '0px',
-                      paddingRight: '10px',
-                      marginTop: '-3px',
-                      marginBottom: '-10px',
+                      fontSize: '14px',
                     }}
+                    className="inline-flex items-center justify-center border rounded-full px-3 text-xs font-semibold tracking-tight leading-none text-center max-w-full break-words shadow-2xs"
                   >
                     {categoryName}
                   </span>
@@ -373,15 +392,15 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
               )}
             </div>
 
-            {/* Right: Price Tag with 3D Bevel (Feature 2: Flexible Pricing Display) */}
+            {/* Right: Price Tag (Feature 2: Flexible Pricing Display) */}
             {!isNormalUser ? (
               <div className="shrink-0 z-10">
-                <div className="bg-[#f4f6f5] rounded-xl p-[2px] shadow-[2px_3px_8px_rgba(0,0,0,0.12),-2px_-2px_6px_rgba(255,255,255,0.85)]">
-                  <div className="bg-[#fae4b2] rounded-[10px] px-2.5 py-1.5 sm:px-3 sm:py-2 flex flex-col items-center justify-center shadow-[inset_0_1px_3px_rgba(255,255,255,1)] border border-[#bca071]/30 min-w-[62px] sm:min-w-[72px]">
-                    <span className="text-sm sm:text-base font-bold text-[#8a734d] leading-none whitespace-nowrap">
+                <div className="bg-[#e2e8f0] rounded-xl p-[2px] shadow-[1px_2px_4px_rgba(0,0,0,0.06)]">
+                  <div className="bg-gradient-to-b from-[#fef3c7] to-[#fde68a] rounded-[10px] px-2.5 py-1 sm:px-3 sm:py-1.5 flex flex-col items-center justify-center border border-[#d97706]/30 min-w-[62px] sm:min-w-[70px]">
+                    <span className="text-sm sm:text-base font-extrabold text-[#92400e] leading-none whitespace-nowrap">
                       ₹{dailyWage}
                     </span>
-                    <span className="text-[10px] sm:text-[11px] font-semibold text-[#8a734d] mt-1 leading-tight text-center break-words max-w-[90px]">
+                    <span className="text-[10px] sm:text-[11px] font-bold text-[#b45309] mt-0.5 leading-tight text-center break-words max-w-[90px]">
                       / {priceUnitText}
                     </span>
                   </div>
@@ -397,42 +416,42 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
             <div className="grid grid-cols-2 px-1 sm:px-2 pt-0.5">
               <div className="text-left">
                 <p
-                  className="text-xs sm:text-sm font-semibold text-[#222b31] leading-tight"
-                  style={{ fontSize: '14px', marginLeft: '5px' }}
+                  className="text-xs font-medium text-slate-500 leading-tight"
+                  style={{ fontSize: '13px', marginLeft: '2px' }}
                 >
                   {lang === 'hi' ? 'अनुभव' : 'Experience'}
                 </p>
                 <p
-                  className="text-xs sm:text-sm font-bold text-[#222b31] mt-0.5 leading-tight break-words"
-                  style={{ fontSize: '14px', marginLeft: '5px' }}
+                  className="text-xs sm:text-sm font-bold text-slate-800 mt-0.5 leading-tight break-words"
+                  style={{ fontSize: '13.5px', marginLeft: '2px' }}
                 >
                   {experienceText}
                 </p>
               </div>
               <div className="text-right">
                 <p
-                  className="text-xs sm:text-sm font-semibold text-[#222b31] leading-tight"
-                  style={{ fontSize: '14px', marginLeft: '0px', marginRight: '5px' }}
+                  className="text-xs font-medium text-slate-500 leading-tight"
+                  style={{ fontSize: '13px', marginLeft: '0px', marginRight: '2px' }}
                 >
-                  {lang === 'hi' ? 'दूरी (सड़क मार्ग)' : 'Distance (by road)'}
+                  {lang === 'hi' ? 'दूरी' : 'Distance'}
                 </p>
                 <div
-                  className="text-xs sm:text-sm font-bold text-[#222b31] mt-0.5 leading-tight"
-                  style={{ fontSize: '13px', marginLeft: '0px', marginRight: '5px' }}
+                  className="text-xs sm:text-sm font-bold text-slate-800 mt-0.5 leading-tight"
+                  style={{ fontSize: '13px', marginLeft: '0px', marginRight: '2px' }}
                 >
-                  {roadDistanceResult?.success ? (
-                    <span>{roadDistanceResult.formattedCardDistance}</span>
+                  {displayDistance ? (
+                    <span>{displayDistance}</span>
                   ) : isCalculatingRoad ? (
                     <span className="text-slate-500 font-medium text-xs">
                       {lang === 'hi' ? 'दूरी लोड हो रही है...' : 'Calculating distance...'}
                     </span>
                   ) : userCoordinates && targetWorkerCoord ? (
                     <span className="text-slate-500 font-medium text-[11px] sm:text-xs">
-                      {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                      {lang === 'hi' ? 'दूरी उपलब्ध नहीं है' : 'Distance unavailable'}
                     </span>
                   ) : (
                     <span className="text-slate-400 font-medium text-xs">
-                      {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                      {lang === 'hi' ? 'दूरी उपलब्ध नहीं है' : 'Distance unavailable'}
                     </span>
                   )}
                 </div>
@@ -440,19 +459,16 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
             </div>
           )}
 
-          {/* Location Bar with Gold Rim Bevel */}
-          <div className="bg-[#bca071] rounded-xl p-[2px] shadow-[0_3px_6px_rgba(0,0,0,0.08)]">
-            <div
-              className="bg-[#f4f6f5] rounded-[10px] py-1.5 sm:py-2 px-2.5 sm:px-3 flex items-center justify-between gap-2 shadow-[inset_0_2px_4px_rgba(0,0,0,0.04)]"
-              style={{ fontSize: '21px' }}
-            >
+          {/* Location Bar with Gold Rim */}
+          <div className="bg-[#d4be98]/70 rounded-xl p-[1.5px] shadow-2xs">
+            <div className="bg-[#fcfaf7] border border-[#ebdcc4]/80 rounded-[10px] py-1.5 sm:py-2 px-2.5 sm:px-3 flex items-center justify-between gap-2 shadow-[inset_0_1px_2px_rgba(0,0,0,0.03)]">
               <div className={`flex items-start gap-2 min-w-0 ${hasAudio || !isNormalUser ? 'flex-[8] basis-[80%]' : 'flex-1'}`}>
                 <MapPin
-                  className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#6e5c47] shrink-0 mt-[3px]"
+                  className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#8a734d] shrink-0 mt-[2px]"
                   style={{ paddingLeft: '0px', marginLeft: '0px' }}
                 />
                 <span
-                  className="text-[11px] sm:text-xs font-medium text-[#222b31] min-w-0 flex-1 whitespace-normal break-words leading-snug"
+                  className="text-[11px] sm:text-xs font-medium text-slate-800 min-w-0 flex-1 whitespace-normal break-words leading-snug"
                   style={{ fontSize: '13px', paddingLeft: '0px', overflowWrap: 'break-word', wordBreak: 'break-word' }}
                 >
                   {locationText || (lang === 'hi' ? 'स्थान उपलब्ध नहीं' : 'Location unavailable')}
@@ -470,9 +486,9 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                       }}
                       aria-label={lang === 'hi' ? 'QR कोड देखें' : 'View QR Code'}
                       title={lang === 'hi' ? 'QR कोड देखें और स्कैन करें' : 'View & scan QR code'}
-                      className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-gradient-to-b from-[#e6f4ea] to-[#ceead6] border border-[#137333]/40 text-[#137333] hover:brightness-105 active:scale-95 flex items-center justify-center shadow-xs transition cursor-pointer select-none"
+                      className="w-7 h-7 sm:w-8 sm:h-8 rounded-full bg-slate-100 border border-slate-300 text-slate-700 hover:bg-slate-200 active:scale-95 flex items-center justify-center shadow-2xs transition cursor-pointer select-none"
                     >
-                      <QrCode className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#137333]" />
+                      <QrCode className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-700" />
                     </button>
                   )}
 
@@ -502,17 +518,17 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                       className={`w-7 h-7 sm:w-8 sm:h-8 rounded-full flex items-center justify-center shadow-xs transition select-none ${
                         hasError
                           ? 'bg-rose-100 border border-rose-400 text-rose-700 hover:bg-rose-200'
-                          : 'bg-gradient-to-b from-[#fef3c7] to-[#fde68a] border border-[#d97706]/40 text-[#92400e] hover:brightness-105 active:scale-95'
+                          : 'bg-amber-100 border border-amber-300 text-amber-800 hover:bg-amber-200 active:scale-95'
                       } ${isLoading ? 'cursor-wait opacity-90' : 'cursor-pointer'}`}
                     >
                       {isLoading ? (
-                        <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#92400e] animate-spin" />
+                        <Clock className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-amber-800 animate-spin" />
                       ) : hasError ? (
                         <RotateCcw className="w-3 h-3 sm:w-3.5 sm:h-3.5 text-rose-700" />
                       ) : isPlaying ? (
-                        <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current text-[#92400e]" />
+                        <Pause className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current text-amber-800" />
                       ) : (
-                        <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current text-[#92400e] ml-0.5" />
+                        <Play className="w-3.5 h-3.5 sm:w-4 sm:h-4 fill-current text-amber-800 ml-0.5" />
                       )}
                     </button>
                   )}
@@ -521,39 +537,37 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
             </div>
           </div>
 
-          {/* Action Buttons: 3D Forest Green Skeuomorphic Buttons with Gold Outer Rim */}
+          {/* Action Buttons */}
           {!hideActions && !isNormalUser && (
             isOwnProfile ? (
               /* Own Profile Action: Show Prominent QR Badge Button */
               <div className="flex gap-2 sm:gap-3 pt-0.5">
-                <div className="flex-1 bg-[#bca071] rounded-xl p-[2px] shadow-[0_5px_10px_rgba(0,0,0,0.18),inset_0_2px_4px_rgba(255,255,255,0.4)]">
-                  <button
-                    type="button"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setShowQRModal(true);
-                    }}
-                    className="w-full bg-gradient-to-b from-[#527c54] to-[#2b4f30] rounded-[10px] py-2 sm:py-2.5 px-3 flex items-center justify-center gap-2 shadow-[inset_0_2px_4px_rgba(255,255,255,0.22),inset_0_-2px_4px_rgba(0,0,0,0.3)] hover:brightness-105 active:scale-[0.98] transition cursor-pointer"
-                  >
-                    <QrCode className="w-4 h-4 text-[#e2cfa7] shrink-0" />
-                    <span className="text-xs sm:text-sm font-semibold text-[#e2cfa7]">
-                      {lang === 'hi' ? 'मेरा QR कोड देखें और शेयर करें' : 'View & Share My QR Code'}
-                    </span>
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setShowQRModal(true);
+                  }}
+                  className="w-full bg-gradient-to-r from-teal-700 to-emerald-800 hover:from-teal-800 hover:to-emerald-900 active:scale-[0.98] text-white rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-2 shadow-xs transition cursor-pointer"
+                >
+                  <QrCode className="w-4 h-4 text-emerald-100 shrink-0" />
+                  <span className="text-xs sm:text-sm font-semibold text-white">
+                    {lang === 'hi' ? 'मेरा QR कोड देखें और शेयर करें' : 'View & Share My QR Code'}
+                  </span>
+                </button>
               </div>
             ) : (
               /* Visitor Actions: Message, Call (if mobile available), and QR Share Button */
               <div className="flex gap-2 sm:gap-3 pt-0.5">
                 {/* Message Button */}
-                <div className="flex-1 bg-[#bca071] rounded-xl p-[2px] shadow-[0_5px_10px_rgba(0,0,0,0.18),inset_0_2px_4px_rgba(255,255,255,0.4)]">
+                <div className="flex-1">
                   <button
                     type="button"
                     onClick={handleMessageClick}
-                    className="w-full bg-gradient-to-b from-[#527c54] to-[#2b4f30] rounded-[10px] py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-[inset_0_2px_4px_rgba(255,255,255,0.22),inset_0_-2px_4px_rgba(0,0,0,0.3)] hover:brightness-105 active:scale-[0.98] transition cursor-pointer"
+                    className="w-full bg-gradient-to-r from-teal-700 to-emerald-800 hover:from-teal-800 hover:to-emerald-900 active:scale-[0.98] text-white rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-xs transition cursor-pointer"
                   >
-                    <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#e2cfa7] shrink-0" />
-                    <span className="text-xs sm:text-sm font-semibold text-[#e2cfa7]">
+                    <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-100 shrink-0" />
+                    <span className="text-xs sm:text-sm font-semibold text-white">
                       {lang === 'hi' ? 'मैसेज' : 'Message'}
                     </span>
                   </button>
@@ -561,15 +575,15 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
 
                 {/* Call Button (Feature 3: Public Mobile Number ON/OFF — Disappears when OFF) */}
                 {Boolean(mobile) && (
-                  <div className="flex-1 bg-[#bca071] rounded-xl p-[2px] shadow-[0_5px_10px_rgba(0,0,0,0.18),inset_0_2px_4px_rgba(255,255,255,0.4)]">
+                  <div className="flex-1">
                     <button
                       type="button"
                       onClick={handleCallClick}
-                      className="w-full bg-gradient-to-b from-[#527c54] to-[#2b4f30] rounded-[10px] py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-[inset_0_2px_4px_rgba(255,255,255,0.22),inset_0_-2px_4px_rgba(0,0,0,0.3)] hover:brightness-105 active:scale-[0.98] transition cursor-pointer"
+                      className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-xs transition cursor-pointer"
                       title={lang === 'hi' ? 'कॉल करें' : 'Call'}
                     >
-                      <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-[#e2cfa7]" />
-                      <span className="text-xs sm:text-sm font-semibold text-[#e2cfa7]">
+                      <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-emerald-100" />
+                      <span className="text-xs sm:text-sm font-semibold text-white">
                         {lang === 'hi' ? 'कॉल करें' : 'Call'}
                       </span>
                     </button>
@@ -577,18 +591,18 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                 )}
 
                 {/* QR Code Button */}
-                <div className="bg-[#bca071] rounded-xl p-[2px] shadow-[0_5px_10px_rgba(0,0,0,0.18),inset_0_2px_4px_rgba(255,255,255,0.4)] shrink-0">
+                <div className="shrink-0">
                   <button
                     type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       setShowQRModal(true);
                     }}
-                    className="h-full bg-gradient-to-b from-[#527c54] to-[#2b4f30] rounded-[10px] py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 shadow-[inset_0_2px_4px_rgba(255,255,255,0.22),inset_0_-2px_4px_rgba(0,0,0,0.3)] hover:brightness-105 active:scale-[0.98] transition cursor-pointer"
+                    className="h-full bg-slate-100 hover:bg-slate-200 active:scale-[0.98] text-slate-700 border border-slate-300 rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 shadow-2xs transition cursor-pointer"
                     title={lang === 'hi' ? 'QR कोड देखें और स्कैन करें' : 'View & scan QR code'}
                   >
-                    <QrCode className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#e2cfa7] shrink-0" />
-                    <span className="text-xs sm:text-sm font-semibold text-[#e2cfa7]">
+                    <QrCode className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-slate-700 shrink-0" />
+                    <span className="text-xs sm:text-sm font-semibold text-slate-700">
                       {lang === 'hi' ? 'QR' : 'QR'}
                     </span>
                   </button>

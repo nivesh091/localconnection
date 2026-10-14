@@ -440,7 +440,7 @@ function AppContent() {
 
   return (
     <div
-      className={`min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans selection:bg-teal-100 selection:text-teal-900 ${
+      className={`min-h-screen bg-slate-50 text-slate-900 flex flex-col font-sans ${
         isChatConversationActive
           ? 'h-[100dvh] max-h-[100dvh] overflow-hidden fixed inset-0 z-40 bg-[#f0f2f5]'
           : ''
@@ -490,7 +490,7 @@ function AppContent() {
         className={`flex-1 w-full ${
           isChatConversationActive
             ? 'h-full overflow-hidden flex flex-col min-h-0 bg-[#f0f2f5]'
-            : 'bg-[#ececec]'
+            : 'bg-slate-50'
         }`}
       >
         {activeTab === 'home' && (

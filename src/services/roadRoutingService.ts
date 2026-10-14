@@ -97,26 +97,25 @@ export class RoadRoutingService {
 
   /**
    * Formats distance in km for worker card display.
-   * Example: "500 km दूर (सड़क मार्ग)" or "0.8 km दूर (सड़क मार्ग)"
+   * Example: "17.4 कि.मी." (Hindi) or "17.4 KM" (English)
    */
   static formatCardDistance(distanceKm: number | null, lang: 'hi' | 'en' = 'hi'): string {
     if (distanceKm === null || isNaN(distanceKm) || distanceKm < 0) {
-      return lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable';
+      return lang === 'hi' ? 'दूरी उपलब्ध नहीं है' : 'Distance unavailable';
     }
 
     let rounded: string;
-    if (distanceKm < 1) {
-      rounded = distanceKm.toFixed(1);
-    } else if (distanceKm < 10) {
-      rounded = distanceKm.toFixed(1);
+    if (distanceKm === 0) {
+      rounded = '0';
     } else {
-      rounded = Math.round(distanceKm).toString();
+      const oneDecimal = Math.round(distanceKm * 10) / 10;
+      rounded = Number.isInteger(oneDecimal) ? oneDecimal.toString() : oneDecimal.toFixed(1);
     }
 
     if (lang === 'hi') {
-      return `${rounded} km दूर (सड़क मार्ग)`;
+      return `${rounded} कि.मी.`;
     }
-    return `${rounded} km away (by road)`;
+    return `${rounded} KM`;
   }
 
   /**
@@ -193,8 +192,8 @@ export class RoadRoutingService {
         distanceKm: 0,
         distanceMeters: 0,
         durationMinutes: 0,
-        formattedCardDistance: lang === 'hi' ? '0 km दूर (सड़क मार्ग)' : '0 km away (by road)',
-        formattedProfileDistance: lang === 'hi' ? 'सड़क मार्ग से दूरी: 0 km' : 'Road distance: 0 km',
+        formattedCardDistance: this.formatCardDistance(0, lang),
+        formattedProfileDistance: lang === 'hi' ? 'दूरी: 0 कि.मी.' : 'Distance: 0 KM',
         isCached: true,
       };
       return zeroResult;

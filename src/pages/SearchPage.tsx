@@ -503,7 +503,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
   return (
     <div className="pb-20 pt-1 px-3 max-w-4xl mx-auto space-y-1.5">
       {/* 1. Main Requirements Page Header (centered "अपनी आवश्यकता पोस्ट कर सकते हैं" ABOVE "आपकी आवश्यकताएँ") */}
-      <div className="bg-gradient-to-r from-[#1e3a5f] to-[#2d4a70] rounded-xl p-2 text-white shadow-xs flex items-center justify-center text-center">
+      <div className="bg-gradient-to-r from-[#094838] via-[#0b5442] to-[#083a2d] rounded-xl p-2 text-white shadow-xs flex items-center justify-center text-center">
         <h1 style={{ fontSize: '18px' }} className="font-bold tracking-tight leading-snug text-center">
           {lang === 'hi'
             ? 'अपनी आवश्यकता पोस्ट कर सकते हैं'
@@ -519,7 +519,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
             type="button"
             style={{ marginLeft: '6px' }}
             onClick={handleOpenCreate}
-            className="p-1 sm:p-1.5 bg-teal-700 hover:bg-teal-800 active:scale-95 text-white rounded-lg font-bold transition shadow-xs cursor-pointer flex items-center justify-center shrink-0"
+            className="p-1 sm:p-1.5 bg-[#0a5241] hover:bg-[#083a2d] active:scale-95 text-white rounded-lg font-bold transition shadow-xs cursor-pointer flex items-center justify-center shrink-0"
             title={lang === 'hi' ? 'आवश्यकता जोड़ें' : 'Add Requirement'}
             aria-label={lang === 'hi' ? 'आवश्यकता जोड़ें' : 'Add Requirement'}
           >
@@ -553,7 +553,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
             }
             setIsMyRequirementsOpen(true);
           }}
-          className="flex items-center gap-0.5 text-xs font-semibold text-teal-800 hover:text-teal-900 transition cursor-pointer px-1.5 py-0.5 rounded-md hover:bg-teal-50 shrink-0"
+          className="flex items-center gap-0.5 text-xs font-semibold text-[#0a5241] hover:text-[#083a2d] transition cursor-pointer px-1.5 py-0.5 rounded-md hover:bg-[#edf7f1] shrink-0"
         >
           <span>{lang === 'hi' ? 'देखें' : 'View'}</span>
           <ChevronRight className="w-3.5 h-3.5" />
@@ -562,7 +562,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
 
       {/* 3. Search Bar & Filter Controls (Thinner row, excessive padding removed from filter button) */}
       <div className="bg-white border border-slate-200 rounded-xl p-0 shadow-2xs space-y-1">
-        <div className="flex gap-1.5 items-center">
+        <div className="flex gap-2 items-center p-1">
           {/* Search Input */}
           <div className="relative flex-1">
             <input
@@ -575,24 +575,24 @@ export const SearchPage: React.FC<SearchPageProps> = ({
                   ? 'आवश्यकता खोजें (नाम, सेवा, स्थान, कीवर्ड)...'
                   : 'Search requirements (name, service, location, keywords)...'
               }
-              className="w-full h-8 pl-2.5 pr-7 rounded-lg border border-slate-300 text-slate-900 focus:outline-none focus:border-teal-700 shadow-2xs"
+              className="w-full h-[40px] pl-3 pr-9 rounded-xl border border-slate-300 text-slate-900 focus:outline-none focus:border-[#0a5241] focus:ring-1 focus:ring-[#0a5241] shadow-2xs"
             />
-            <div className="absolute right-2 top-2 text-slate-400 pointer-events-none">
-              <Search className="w-3.5 h-3.5" />
+            <div className="absolute right-3 top-3 text-slate-400 pointer-events-none">
+              <Search className="w-4 h-4" />
             </div>
           </div>
 
-          {/* Filter Button - excessive internal padding removed */}
+          {/* Filter Button */}
           <button
             type="button"
             onClick={() => setIsFilterOpen(true)}
-            className={`px-2 h-8 rounded-lg border flex items-center gap-1 text-[11px] font-semibold transition active:scale-95 cursor-pointer shrink-0 ${
+            className={`px-3 h-[40px] rounded-xl border flex items-center gap-1.5 text-xs font-semibold transition active:scale-95 cursor-pointer shrink-0 ${
               hasActiveFilters
-                ? 'bg-teal-700 text-white border-teal-700 shadow-xs'
+                ? 'bg-[#0a5241] text-white border-[#0a5241] shadow-xs'
                 : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
             }`}
           >
-            <Filter className="w-3 h-3" />
+            <Filter className="w-3.5 h-3.5" />
             <span style={{ fontSize: '13px' }}>{lang === 'hi' ? 'फ़िल्टर' : 'Filter'}</span>
             {hasActiveFilters && (
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 ml-0.5" />
@@ -609,7 +609,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
             {selectedCategories.map((c) => (
               <span
                 key={c}
-                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-300 font-semibold text-[10px]"
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#edf7f1] text-[#0a5241] border border-[#d3eadb] font-semibold text-[10px]"
               >
                 <span>{c}</span>
                 <button
@@ -617,7 +617,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
                   onClick={() =>
                     setSelectedCategories(selectedCategories.filter((x) => x !== c))
                   }
-                  className="hover:text-teal-950 font-bold"
+                  className="hover:text-emerald-950 font-bold"
                 >
                   ×
                 </button>
@@ -625,12 +625,14 @@ export const SearchPage: React.FC<SearchPageProps> = ({
             ))}
 
             {selectedRadiusKm !== undefined && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-teal-50 text-teal-800 border border-teal-300 font-semibold text-[10px]">
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-[#edf7f1] text-[#0a5241] border border-[#d3eadb] font-semibold text-[10px]"
+              >
                 <span>{selectedRadiusKm} km</span>
                 <button
                   type="button"
                   onClick={() => setSelectedRadiusKm(undefined)}
-                  className="hover:text-teal-950 font-bold"
+                  className="hover:text-emerald-950 font-bold"
                 >
                   ×
                 </button>
@@ -659,12 +661,12 @@ export const SearchPage: React.FC<SearchPageProps> = ({
             style={{ marginBottom: '4px' }}
             onClick={handleDetectLocation}
             disabled={locationDetecting}
-            className="inline-flex items-center justify-center text-center gap-1 px-[30px] py-[2px] bg-slate-50 hover:bg-teal-50/80 active:bg-teal-100/70 text-slate-800 hover:text-teal-900 border border-slate-200 hover:border-teal-400/60 rounded-lg font-semibold text-[11px] sm:text-xs shadow-2xs hover:shadow-xs transition duration-150 active:scale-[0.98] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed select-none min-h-[30px]"
+            className="inline-flex items-center justify-center text-center gap-1 px-[30px] py-[2px] bg-slate-50 hover:bg-[#edf7f1] active:bg-[#d3eadb] text-slate-800 hover:text-[#0a5241] border border-slate-200 hover:border-[#0a5241]/40 rounded-lg font-semibold text-[11px] sm:text-xs shadow-2xs hover:shadow-xs transition duration-150 active:scale-[0.98] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed select-none min-h-[30px]"
           >
             {locationDetecting ? (
-              <Loader2 className="w-3 h-3 text-teal-700 animate-spin shrink-0" />
+              <Loader2 className="w-3 h-3 text-[#0a5241] animate-spin shrink-0" />
             ) : (
-              <Navigation className="w-3 h-3 text-teal-700 shrink-0" />
+              <Navigation className="w-3 h-3 text-[#0a5241] shrink-0" />
             )}
             <span style={{ fontSize: '15px' }} className="truncate">
               {locationDetecting
@@ -717,7 +719,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
 
       {/* 6. Main Public Requirements Feed (Points 4 & 37: "लोगों की आवश्यकताएँ") */}
       <div className="space-y-2 pt-0.5">
-        <div className="bg-gradient-to-r from-[#1e3a5f] to-[#2d4a70] rounded-xl p-2.5 sm:p-3 text-white shadow-xs flex items-center justify-between">
+        <div className="bg-gradient-to-r from-[#094838] via-[#0b5442] to-[#083a2d] rounded-xl p-2.5 sm:p-3 text-white shadow-xs flex items-center justify-between">
           <h2 className="text-sm sm:text-base font-bold tracking-tight flex items-center gap-2">
             <span>{lang === 'hi' ? 'लोगों की आवश्यकताएँ' : "People's Requirements"}</span>
             {!isLoadingPublic && (
@@ -740,7 +742,7 @@ export const SearchPage: React.FC<SearchPageProps> = ({
 
         {isLoadingPublic ? (
           <div className="py-12 text-center space-y-2">
-            <Loader2 className="w-7 h-7 text-teal-700 animate-spin mx-auto" />
+            <Loader2 className="w-7 h-7 text-[#0a5241] animate-spin mx-auto" />
             <p className="text-xs text-slate-500">
               {lang === 'hi' ? 'आवश्यकताएँ लोड हो रही हैं...' : 'Loading requirements...'}
             </p>

@@ -32,7 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
   const firstLetter = user?.name ? user.name.trim().charAt(0).toUpperCase() : null;
 
   return (
-    <header className="sticky top-0 z-40 w-full bg-[#fff4e9] border-b border-slate-200/80 shadow-xs">
+    <header className="sticky top-0 z-40 w-full bg-[#fff4e9] border-b border-[#ebdcc4] shadow-xs">
       <div className="max-w-4xl mx-auto px-3.5 h-14 flex items-center justify-between gap-2">
         {/* LEFT: Hamburger menu & Website Logo */}
         <div className="flex items-center gap-1.5 shrink-0">
@@ -40,7 +40,7 @@ export const Header: React.FC<HeaderProps> = ({
             type="button"
             onClick={onOpenSidebar}
             aria-label="Open navigation menu"
-            className="p-2 -ml-1 text-slate-700 hover:text-slate-900 active:bg-slate-100 rounded-lg transition cursor-pointer"
+            className="p-2 -ml-1 text-slate-700 hover:text-slate-900 active:bg-slate-100 rounded-lg transition cursor-pointer min-w-[40px] min-h-[40px] flex items-center justify-center"
           >
             <Menu className="w-5 h-5" />
           </button>

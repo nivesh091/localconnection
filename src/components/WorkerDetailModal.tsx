@@ -111,11 +111,11 @@ export const WorkerDetailModal: React.FC<WorkerDetailModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="bg-[#fcfaf7] border border-[#d4be98]/80 rounded-3xl w-full max-w-xl max-h-[92vh] overflow-y-auto shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-150 my-auto"
+        className="bg-white border border-slate-200/90 rounded-3xl w-full max-w-xl max-h-[92vh] overflow-y-auto shadow-2xl flex flex-col animate-in fade-in zoom-in-95 duration-150 my-auto"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Modal Header */}
-        <div className="sticky top-0 bg-[#fff4e9] px-4 sm:px-5 py-3.5 border-b border-[#ebdcc4] flex items-center justify-between z-20 shadow-2xs">
+        <div className="sticky top-0 bg-[#fff4e9] px-4 sm:px-5 py-3.5 border-b border-[#ebdcc4] flex items-center justify-between z-20 shadow-xs">
           <h2 className="text-base font-bold text-slate-800 tracking-tight">
             {t.viewProfile}
           </h2>
@@ -160,7 +160,7 @@ export const WorkerDetailModal: React.FC<WorkerDetailModalProps> = ({
               <button
                 type="button"
                 onClick={() => setShowQRModal(true)}
-                className="p-1.5 text-teal-800 hover:text-teal-900 bg-teal-50 hover:bg-teal-100 border border-teal-200/80 rounded-lg transition cursor-pointer flex items-center gap-1 text-xs font-semibold"
+                className="p-1.5 text-[#0a5241] hover:text-[#083a2d] bg-[#edf7f1] hover:bg-[#d3eadb] border border-[#d3eadb] rounded-lg transition cursor-pointer flex items-center gap-1 text-xs font-semibold"
                 title={lang === 'hi' ? 'QR कोड देखें और शेयर करें' : 'View and share QR code'}
               >
                 <QrCode className="w-4 h-4" />

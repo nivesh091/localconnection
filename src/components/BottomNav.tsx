@@ -28,9 +28,10 @@ export const BottomNav: React.FC<BottomNavProps> = ({ activeTab, onNavigate, unr
           return (
             <button
               key={tab.id}
+              type="button"
               onClick={() => onNavigate(tab.id)}
-              className={`relative flex flex-col items-center justify-center pt-1 pb-1 transition-colors ${
-                isActive ? 'text-teal-800 font-semibold' : 'text-slate-500 hover:text-slate-800'
+              className={`relative flex flex-col items-center justify-center pt-1 pb-1 min-h-[48px] transition-colors cursor-pointer select-none active:scale-95 ${
+                isActive ? 'text-[#0a5241] font-semibold' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
               <div className="relative">

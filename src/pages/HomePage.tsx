@@ -364,7 +364,7 @@ export const HomePage: React.FC<HomePageProps> = ({
       </div>
 
       {/* Search area: Search input (75-80%) + Filter button (20-25%), same height, no mic (Section 27) */}
-      <form onSubmit={handleSearchSubmit} className="mt-3 mb-[6px] px-[5px] pt-0 flex items-center gap-2">
+      <form onSubmit={handleSearchSubmit} className="mt-3 mb-2 px-1 pt-0 flex items-center gap-2">
         {/* Search input (75-80%) */}
         <div className="relative flex-[4] sm:flex-[4.5] min-w-0">
           <input
@@ -372,13 +372,13 @@ export const HomePage: React.FC<HomePageProps> = ({
             value={searchInput}
             onChange={(e) => setSearchInput(e.target.value)}
             placeholder={t.searchPlaceholder}
-            className="w-full h-[38px] pl-3.5 pr-10 rounded-xl border border-slate-300 bg-white text-xs sm:text-sm text-slate-900 focus:outline-none focus:border-teal-700 shadow-2xs transition"
+            className="w-full h-[42px] pl-3.5 pr-11 rounded-xl border border-slate-300 bg-white text-sm text-slate-900 focus:outline-none focus:border-[#0a5241] focus:ring-1 focus:ring-[#0a5241] shadow-2xs transition"
           />
           {/* Search Icon on right of input (Section 27) */}
           <button
             type="submit"
             aria-label="Search"
-            className="absolute right-1 top-1 bottom-1 px-2.5 text-slate-500 hover:text-teal-800 active:scale-95 transition flex items-center justify-center rounded-lg"
+            className="absolute right-1 top-1 bottom-1 px-3 text-slate-500 hover:text-[#0a5241] active:scale-95 transition flex items-center justify-center rounded-lg cursor-pointer"
           >
             <Search className="w-4 h-4" />
           </button>
@@ -388,7 +388,7 @@ export const HomePage: React.FC<HomePageProps> = ({
         <button
           type="button"
           onClick={handleFilterButtonClick}
-          className={`flex-1 min-w-[70px] h-[38px] px-2.5 rounded-xl border font-semibold text-xs flex items-center justify-center gap-1 shadow-2xs transition active:scale-95 cursor-pointer ${
+          className={`flex-1 min-w-[76px] h-[42px] px-2.5 rounded-xl border font-semibold text-xs flex items-center justify-center gap-1.5 shadow-2xs transition active:scale-95 cursor-pointer ${
             hasActiveFilters
               ? 'border-rose-300 bg-rose-50 text-rose-700 hover:bg-rose-100 hover:border-rose-400'
               : 'border-slate-300 bg-white hover:bg-slate-50 active:bg-slate-100 text-slate-700'
@@ -402,7 +402,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             </>
           ) : (
             <>
-              <Filter className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+              <Filter className="w-3.5 h-3.5 text-slate-600 shrink-0" />
               <span className="truncate">{t.filter}</span>
             </>
           )}
@@ -417,12 +417,12 @@ export const HomePage: React.FC<HomePageProps> = ({
               type="button"
               onClick={handleDetectLocation}
               disabled={locationDetecting}
-              className="inline-flex items-center justify-center gap-1.5 px-4 py-1.5 bg-slate-50 hover:bg-teal-50/80 active:bg-teal-100/70 text-slate-800 hover:text-teal-900 border border-slate-200 hover:border-teal-400/60 rounded-xl font-semibold text-xs shadow-2xs hover:shadow-xs transition duration-150 active:scale-[0.98] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed select-none min-h-[34px]"
+              className="inline-flex items-center justify-center gap-1.5 px-4 py-2 bg-white hover:bg-[#edf7f1] active:bg-[#d3eadb] text-slate-800 hover:text-[#0a5241] border border-slate-200 hover:border-[#0a5241]/40 rounded-xl font-semibold text-xs shadow-2xs hover:shadow-xs transition duration-150 active:scale-[0.98] cursor-pointer disabled:opacity-60 disabled:cursor-not-allowed select-none min-h-[38px]"
             >
               {locationDetecting ? (
-                <Loader2 className="w-3.5 h-3.5 text-teal-700 animate-spin shrink-0" />
+                <Loader2 className="w-3.5 h-3.5 text-[#0a5241] animate-spin shrink-0" />
               ) : (
-                <Navigation className="w-3.5 h-3.5 text-teal-700 shrink-0" />
+                <Navigation className="w-3.5 h-3.5 text-[#0a5241] shrink-0" />
               )}
               <span style={{ fontSize: '13px' }} className="truncate">
                 {locationDetecting ? 'लोकेशन पहचानी जा रही है...' : 'लोकेशन का उपयोग करें'}
@@ -462,7 +462,7 @@ export const HomePage: React.FC<HomePageProps> = ({
         <div className="flex flex-wrap items-center gap-1.5 mb-3 text-xs">
           <span className="text-slate-600 text-xs font-bold">लागू फिल्टर:</span>
           {filters.categoryId && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-50 border border-teal-200 text-teal-800 rounded-lg text-xs font-medium shadow-2xs">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#edf7f1] border border-[#d3eadb] text-[#0a5241] rounded-lg text-xs font-medium shadow-2xs">
               <span>{categories.find((c) => c.id === filters.categoryId)?.name_hi || 'श्रेणी'}</span>
               <button
                 type="button"
@@ -475,7 +475,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             </span>
           )}
           {filters.radiusKm && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-50 border border-teal-200 text-teal-800 rounded-lg text-xs font-medium shadow-2xs">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#edf7f1] border border-[#d3eadb] text-[#0a5241] rounded-lg text-xs font-medium shadow-2xs">
               <span>{filters.radiusKm} km</span>
               <button
                 type="button"
@@ -488,7 +488,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             </span>
           )}
           {filters.maxPricePerDay && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-50 border border-teal-200 text-teal-800 rounded-lg text-xs font-medium shadow-2xs">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#edf7f1] border border-[#d3eadb] text-[#0a5241] rounded-lg text-xs font-medium shadow-2xs">
               <span>₹{filters.maxPricePerDay}/दिन तक</span>
               <button
                 type="button"
@@ -501,7 +501,7 @@ export const HomePage: React.FC<HomePageProps> = ({
             </span>
           )}
           {filters.minExperienceYears && (
-            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-teal-50 border border-teal-200 text-teal-800 rounded-lg text-xs font-medium shadow-2xs">
+            <span className="inline-flex items-center gap-1 px-2.5 py-1 bg-[#edf7f1] border border-[#d3eadb] text-[#0a5241] rounded-lg text-xs font-medium shadow-2xs">
               <span>{filters.minExperienceYears}+ वर्ष अनुभव</span>
               <button
                 type="button"

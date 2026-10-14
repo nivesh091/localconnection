@@ -98,8 +98,8 @@ export const GetHelpCard: React.FC<GetHelpCardProps> = ({ showCallHelpline = tru
       </div>
 
       {isSuccess ? (
-        <div className="bg-white border border-teal-200 rounded-2xl p-6 text-center space-y-3 shadow-xs">
-          <CheckCircle className="w-12 h-12 text-teal-600 mx-auto" />
+        <div className="bg-white border border-emerald-200 rounded-2xl p-6 text-center space-y-3 shadow-xs">
+          <CheckCircle className="w-12 h-12 text-emerald-600 mx-auto" />
           <h3 className="text-base font-bold text-slate-900">सहायता संदेश प्राप्त हो गया है!</h3>
           <p className="text-xs text-slate-600">
             काम मित्र टीम आपके आवाज संदेश को सुनकर जल्द ही सहायता उपलब्ध कराएगी।
@@ -110,7 +110,7 @@ export const GetHelpCard: React.FC<GetHelpCardProps> = ({ showCallHelpline = tru
               setIsSuccess(false);
               setVoiceBlob(null);
             }}
-            className="px-5 py-2 bg-teal-700 hover:bg-teal-800 text-white font-semibold text-xs rounded-xl transition"
+            className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl transition"
           >
             नया संदेश भेजें
           </button>
@@ -119,7 +119,6 @@ export const GetHelpCard: React.FC<GetHelpCardProps> = ({ showCallHelpline = tru
         <form
           onSubmit={handleSubmit}
           className="bg-white border border-slate-200/90 rounded-2xl p-4 sm:p-5 shadow-xs space-y-4"
-          style={{ borderColor: '#ffffff', backgroundColor: '#ffffff' }}
         >
           {errorMsg && (
             <div className="flex items-center gap-2 p-2.5 bg-rose-50 border border-rose-200 rounded-xl text-rose-700 text-xs">
@@ -136,14 +135,13 @@ export const GetHelpCard: React.FC<GetHelpCardProps> = ({ showCallHelpline = tru
             }}
             title="अपनी समस्या बोलकर बताएं"
             subtitle="माइक दबाकर अपनी बात खुलकर बोलें"
-            style={{ backgroundColor: '#daeeff' }}
           />
 
           {/* Send Button: "हमें भेजें" */}
           <button
             type="submit"
             disabled={!voiceBlob || isSubmitting}
-            className="w-full py-3 bg-teal-700 hover:bg-teal-800 active:bg-teal-900 text-white font-bold text-sm rounded-xl shadow-xs transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            className="w-full py-3 bg-gradient-to-r from-[#094838] to-[#083a2d] hover:brightness-110 active:scale-[0.98] text-white font-bold text-sm rounded-xl shadow-xs transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
           >
             <Send className="w-4 h-4" />
             <span style={{ fontSize: '15px' }}>{isSubmitting ? (t.loading || 'भेज रहे हैं...') : 'हमें भेजें'}</span>

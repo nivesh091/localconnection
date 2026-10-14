@@ -470,11 +470,11 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
                 </span>
               ) : userCoordinates && targetRequirementCoord ? (
                 <span style={{ marginLeft: '0px' }} className="text-slate-500 font-medium text-[11px] sm:text-xs">
-                  {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                  {lang === 'hi' ? 'दूरी उपलब्ध नहीं है' : 'Distance unavailable'}
                 </span>
               ) : (
                 <span style={{ marginLeft: '0px' }} className="text-slate-400 font-medium text-xs">
-                  {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                  {lang === 'hi' ? 'दूरी उपलब्ध नहीं है' : 'Distance unavailable'}
                 </span>
               )}
             </span>
