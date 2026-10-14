@@ -8,6 +8,8 @@ import { RequirementService } from '../services/requirementService';
 import { useShortcutAudio } from '../hooks/useShortcutAudio';
 import verificationLogo from '@/verificationlogo.png';
 import { WorkerService } from '../services/workerService';
+import { RoadRoutingService, RoadDistanceResult } from '../services/roadRoutingService';
+import { LocationService } from '../services/locationService';
 
 interface RequirementCardProps {
   requirement: Requirement;
@@ -98,27 +100,140 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
         : `${experienceYears} ${experienceYears === 1 ? 'Year' : 'Years'}`
       : '—';
 
-  // 5. Distance calculation using existing DistanceService & exact coordinates (Point 8: "दूरी")
-  const distanceText = useMemo(() => {
+  // Background coordinate detection for viewer if missing
+  const [asyncViewerCoords, setAsyncViewerCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  useEffect(() => {
+    if (!currentUserCoords && !userLocation && !LocationService.getLastKnownPosition() && !asyncViewerCoords) {
+      let isMounted = true;
+      LocationService.getCurrentPosition()
+        .then((pos) => {
+          if (isMounted && pos) {
+            setAsyncViewerCoords({ lat: pos.latitude, lng: pos.longitude });
+          }
+        })
+        .catch(() => {});
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [currentUserCoords, userLocation, asyncViewerCoords]);
+
+  // 5. Current User Coordinates (viewer/worker viewing the requirement)
+  const userCoordinates = useMemo(() => {
+    if (currentUserCoords) {
+      const c = DistanceService.extractCoordinates(currentUserCoords);
+      if (c) return c;
+    }
+    if (userLocation) {
+      const c = DistanceService.extractCoordinates(userLocation);
+      if (c) return c;
+    }
+    if (asyncViewerCoords) {
+      return asyncViewerCoords;
+    }
+    const lastPos = LocationService.getLastKnownPosition();
+    if (lastPos) {
+      return { lat: Number(lastPos.latitude), lng: Number(lastPos.longitude) };
+    }
+    return null;
+  }, [currentUserCoords, userLocation, asyncViewerCoords]);
+
+  // 6. Target Requirement Coordinates (Strictly the job's actual location coordinates, NOT poster's profile coordinates)
+  const [asyncRequirementCoords, setAsyncRequirementCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  useEffect(() => {
     if (
-      !currentUserCoords ||
-      currentUserCoords.lat === undefined ||
-      currentUserCoords.lng === undefined ||
-      requirement.latitude === null ||
-      requirement.latitude === undefined ||
-      requirement.longitude === null ||
-      requirement.longitude === undefined
+      requirement.latitude !== null &&
+      requirement.latitude !== undefined &&
+      requirement.longitude !== null &&
+      requirement.longitude !== undefined
     ) {
-      return '';
+      return;
+    }
+    // If coordinates are missing on requirement, resolve using the requirement's job location fields
+    if (requirement.place || requirement.district) {
+      let isMounted = true;
+      LocationService.resolveLocationCoordinates({
+        village: requirement.place,
+        subdistrict: requirement.subdistrict || requirement.tehsil || undefined,
+        district: requirement.district || undefined,
+        state: requirement.state || undefined,
+      })
+        .then((coords) => {
+          if (isMounted && coords) {
+            setAsyncRequirementCoords({ lat: coords.latitude, lng: coords.longitude });
+          }
+        })
+        .catch(() => {});
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [requirement.latitude, requirement.longitude, requirement.place, requirement.district, requirement.subdistrict, requirement.tehsil, requirement.state]);
+
+  const targetRequirementCoord = useMemo(() => {
+    if (
+      requirement.latitude !== null &&
+      requirement.latitude !== undefined &&
+      requirement.longitude !== null &&
+      requirement.longitude !== undefined &&
+      !isNaN(Number(requirement.latitude)) &&
+      !isNaN(Number(requirement.longitude))
+    ) {
+      return { lat: Number(requirement.latitude), lng: Number(requirement.longitude) };
+    }
+    if (asyncRequirementCoords) {
+      return asyncRequirementCoords;
+    }
+    if (requirement.location) {
+      const c = DistanceService.extractCoordinates(requirement.location);
+      if (c) return c;
+    }
+    return null;
+  }, [requirement.latitude, requirement.longitude, asyncRequirementCoords, requirement.location]);
+
+  // 7. Road Distance Calculation (Real road routing path via RoadRoutingService, strictly separate from straight-line displacement)
+  const [roadDistanceResult, setRoadDistanceResult] = useState<RoadDistanceResult | null>(() => {
+    if (userCoordinates && targetRequirementCoord) {
+      return RoadRoutingService.getCachedRoadDistance(userCoordinates, targetRequirementCoord, lang);
+    }
+    return null;
+  });
+  const [isCalculatingRoad, setIsCalculatingRoad] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!userCoordinates || !targetRequirementCoord) {
+      setRoadDistanceResult(null);
+      return;
     }
 
-    const distKm = DistanceService.calculateHaversineDistanceKm(
-      { lat: currentUserCoords.lat, lng: currentUserCoords.lng },
-      { lat: requirement.latitude, lng: requirement.longitude }
-    );
+    const cached = RoadRoutingService.getCachedRoadDistance(userCoordinates, targetRequirementCoord, lang);
+    if (cached) {
+      setRoadDistanceResult(cached);
+      return;
+    }
 
-    return distKm !== null ? `${distKm.toFixed(1)} km` : '';
-  }, [requirement.latitude, requirement.longitude, currentUserCoords]);
+    let isMounted = true;
+    setIsCalculatingRoad(true);
+
+    RoadRoutingService.calculateRoadDistance(userCoordinates, targetRequirementCoord, lang)
+      .then((res) => {
+        if (isMounted) {
+          setRoadDistanceResult(res);
+          setIsCalculatingRoad(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setIsCalculatingRoad(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [userCoordinates?.lat, userCoordinates?.lng, targetRequirementCoord?.lat, targetRequirementCoord?.lng, lang]);
 
   const handleEditClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -248,7 +363,21 @@ export const RequirementCard: React.FC<RequirementCardProps> = ({
               {lang === 'hi' ? 'दूरी: ' : 'Distance: '}
             </span>
             <span style={{ fontSize: '14px' }} className="font-bold text-slate-800">
-              {distanceText || '—'}
+              {roadDistanceResult?.success ? (
+                <span>{roadDistanceResult.formattedCardDistance}</span>
+              ) : isCalculatingRoad ? (
+                <span className="text-slate-500 font-medium text-xs">
+                  {lang === 'hi' ? 'दूरी लोड हो रही है...' : 'Calculating distance...'}
+                </span>
+              ) : userCoordinates && targetRequirementCoord ? (
+                <span className="text-slate-500 font-medium text-[11px] sm:text-xs">
+                  {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                </span>
+              ) : (
+                <span className="text-slate-400 font-medium text-xs">
+                  {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                </span>
+              )}
             </span>
           </div>
         </div>

@@ -11,6 +11,8 @@ import {
   Plus,
   Edit2,
   QrCode,
+  Navigation,
+  RefreshCw,
 } from 'lucide-react';
 import { WorkerProfile, UserProfile, UserLocation, getPriceUnitLabel } from '../types';
 import { WorkerCard } from './WorkerCard';
@@ -23,6 +25,8 @@ import { CommentsSection } from './CommentsSection';
 import { useTranslation } from '../hooks/useTranslation';
 import { useAuth } from '../context/AuthContext';
 import { LocationService } from '../services/locationService';
+import { DistanceService } from '../services/distanceService';
+import { RoadRoutingService, RoadDistanceResult } from '../services/roadRoutingService';
 import { CommentReference } from '../types';
 
 export interface FullProfileDetailsProps {
@@ -103,6 +107,105 @@ export const FullProfileDetails: React.FC<FullProfileDetailsProps> = ({
   // Authoritative structured location matching WorkerCard exactly: गाँव: ..., तहसील: ..., जिला: ..., राज्य: ...
   const locationText = LocationService.formatWorkerCard(profileLocation, '', lang);
 
+  // Background coordinate detection for viewer if missing
+  const { location: currentUserLocation } = useAuth();
+  const [asyncViewerCoords, setAsyncViewerCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  React.useEffect(() => {
+    if (!currentUserLocation && !LocationService.getLastKnownPosition() && !asyncViewerCoords) {
+      let isMounted = true;
+      LocationService.getCurrentPosition()
+        .then((pos) => {
+          if (isMounted && pos) {
+            setAsyncViewerCoords({ lat: pos.latitude, lng: pos.longitude });
+          }
+        })
+        .catch(() => {});
+      return () => {
+        isMounted = false;
+      };
+    }
+  }, [currentUserLocation, asyncViewerCoords]);
+
+  // Viewer Coordinates
+  const viewerCoordinates = React.useMemo(() => {
+    if (currentUserLocation) {
+      const c = DistanceService.extractCoordinates(currentUserLocation);
+      if (c) return c;
+    }
+    if (currentUser?.location) {
+      const c = DistanceService.extractCoordinates(currentUser.location);
+      if (c) return c;
+    }
+    if (asyncViewerCoords) {
+      return asyncViewerCoords;
+    }
+    const lastPos = LocationService.getLastKnownPosition();
+    if (lastPos) {
+      return { lat: Number(lastPos.latitude), lng: Number(lastPos.longitude) };
+    }
+    return null;
+  }, [currentUserLocation, currentUser?.location, asyncViewerCoords]);
+
+  // Selected Worker Coordinates
+  const workerCoordinates = React.useMemo(() => {
+    if (profileLocation) {
+      const c = DistanceService.extractCoordinates(profileLocation);
+      if (c) return c;
+    }
+    if (worker?.location) {
+      const c = DistanceService.extractCoordinates(worker.location);
+      if (c) return c;
+    }
+    if (worker) {
+      const c = DistanceService.extractCoordinates(worker as any);
+      if (c) return c;
+    }
+    return null;
+  }, [profileLocation, worker]);
+
+  // Road Distance for Worker Profile (Requirement 4)
+  const [roadDistanceResult, setRoadDistanceResult] = useState<RoadDistanceResult | null>(() => {
+    if (viewerCoordinates && workerCoordinates && !isOwnProfile) {
+      return RoadRoutingService.getCachedRoadDistance(viewerCoordinates, workerCoordinates, lang);
+    }
+    return null;
+  });
+  const [isCalculatingRoad, setIsCalculatingRoad] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    if (isOwnProfile || !viewerCoordinates || !workerCoordinates) {
+      setRoadDistanceResult(null);
+      return;
+    }
+
+    const cached = RoadRoutingService.getCachedRoadDistance(viewerCoordinates, workerCoordinates, lang);
+    if (cached) {
+      setRoadDistanceResult(cached);
+      return;
+    }
+
+    let isMounted = true;
+    setIsCalculatingRoad(true);
+
+    RoadRoutingService.calculateRoadDistance(viewerCoordinates, workerCoordinates, lang)
+      .then((res) => {
+        if (isMounted) {
+          setRoadDistanceResult(res);
+          setIsCalculatingRoad(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setIsCalculatingRoad(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [viewerCoordinates?.lat, viewerCoordinates?.lng, workerCoordinates?.lat, workerCoordinates?.lng, isOwnProfile, lang]);
+
   const effectiveWorker: WorkerProfile = worker || {
     user_id: user.id,
     experience_years: 0,
@@ -125,6 +228,7 @@ export const FullProfileDetails: React.FC<FullProfileDetailsProps> = ({
           onRequireAuth={onRequireAuth || (() => {})}
           isNormalUser={!isWorker}
           isOwnProfile={isOwnProfile}
+          currentUserCoords={viewerCoordinates}
           onOpenPhotoViewer={() => {
             if (onOpenPhotoViewer) {
               onOpenPhotoViewer(user.profile_photo || undefined);
@@ -182,7 +286,11 @@ export const FullProfileDetails: React.FC<FullProfileDetailsProps> = ({
         <div className="bg-[#fcfaf7] border border-[#ebdcc4]/80 rounded-xl p-3.5 sm:p-4 space-y-1.5 shadow-2xs">
           <h4 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-[#8a734d] flex items-center gap-1.5">
             <MapPin className="w-4 h-4 text-[#8a734d] shrink-0" />
-            <span style={{ fontSize: '14px' }}>{lang === 'hi' ? 'आपका स्थान / पता' : 'Your Location / Address'}</span>
+            <span style={{ fontSize: '14px' }}>
+              {isOwnProfile
+                ? (lang === 'hi' ? 'आपका स्थान / पता' : 'Your Location / Address')
+                : (lang === 'hi' ? 'स्थान / पता' : 'Location / Address')}
+            </span>
           </h4>
           <p
             className="text-sm sm:text-base font-semibold text-slate-800 leading-relaxed whitespace-normal break-words"
@@ -190,6 +298,27 @@ export const FullProfileDetails: React.FC<FullProfileDetailsProps> = ({
           >
             {locationText || (lang === 'hi' ? 'स्थान उपलब्ध नहीं' : 'Location unavailable')}
           </p>
+
+          {/* Road Distance Display (Requirement 4: Real road-route distance on worker profile) */}
+          {!isOwnProfile && isWorker && (
+            <div className="pt-2 mt-2 border-t border-[#ebdcc4]/60 flex items-center gap-2 text-xs sm:text-sm">
+              <Navigation className="w-4 h-4 text-teal-700 shrink-0" />
+              {isCalculatingRoad ? (
+                <span className="text-slate-500 italic flex items-center gap-1.5">
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-teal-600 shrink-0" />
+                  <span>{lang === 'hi' ? 'सड़क मार्ग की दूरी गणना हो रही है...' : 'Calculating road distance...'}</span>
+                </span>
+              ) : roadDistanceResult?.success ? (
+                <span className="font-bold text-teal-900">
+                  {roadDistanceResult.formattedProfileDistance}
+                </span>
+              ) : (
+                <span className="text-slate-500 font-medium">
+                  {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                </span>
+              )}
+            </div>
+          )}
         </div>
 
         {/* WORKER-ONLY: Section 3 — आपकी फीस (Your Fee) */}

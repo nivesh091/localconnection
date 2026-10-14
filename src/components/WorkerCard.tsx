@@ -1,15 +1,15 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { Phone, MessageSquare, MapPin, Play, Pause, QrCode, Heart } from 'lucide-react';
+import { Phone, MessageSquare, MapPin, Play, Pause, QrCode } from 'lucide-react';
 import { WorkerProfile, getPriceUnitLabel } from '../types';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { LocationService } from '../services/locationService';
 import { DistanceService } from '../services/distanceService';
+import { RoadRoutingService, RoadDistanceResult } from '../services/roadRoutingService';
 import { ImageViewerModal } from './ImageViewerModal';
 import { ProfilePhotoViewerModal } from './ProfilePhotoViewerModal';
 import { WorkerQRCodeModal } from './WorkerQRCodeModal';
 import { useShortcutAudio } from '../hooks/useShortcutAudio';
-import { useFavorites } from '../hooks/useFavorites';
 import verificationLogo from '@/verificationlogo.png';
 
 interface WorkerCardProps {
@@ -42,14 +42,6 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
   const [showPhotoViewer, setShowPhotoViewer] = useState(false);
   const [showQRModal, setShowQRModal] = useState(false);
   const [callNotice, setCallNotice] = useState<string | null>(null);
-
-  // Favorite Workers hook
-  const { isFavorite, toggleFavorite } = useFavorites(worker.user_id);
-
-  const handleFavoriteClick = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    await toggleFavorite(worker);
-  };
 
   // Audio Shortcut Integration (Home Screen Worker Cards)
   const audioUrl = worker.voice_recording?.public_url || null;
@@ -201,12 +193,47 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
     return null;
   }, [workerLocation, asyncWorkerCoords, worker]);
 
-  const distanceText = useMemo(() => {
-    if (!userCoordinates || !targetWorkerCoord) {
-      return null;
+  // 8. Road Distance Calculation (Real road routing path, strictly separate from straight-line displacement)
+  const [roadDistanceResult, setRoadDistanceResult] = useState<RoadDistanceResult | null>(() => {
+    if (userCoordinates && targetWorkerCoord) {
+      return RoadRoutingService.getCachedRoadDistance(userCoordinates, targetWorkerCoord, lang);
     }
-    return DistanceService.getFormattedDistanceBetween(userCoordinates, targetWorkerCoord);
-  }, [userCoordinates, targetWorkerCoord]);
+    return null;
+  });
+  const [isCalculatingRoad, setIsCalculatingRoad] = useState<boolean>(false);
+
+  useEffect(() => {
+    if (!userCoordinates || !targetWorkerCoord) {
+      setRoadDistanceResult(null);
+      return;
+    }
+
+    const cached = RoadRoutingService.getCachedRoadDistance(userCoordinates, targetWorkerCoord, lang);
+    if (cached) {
+      setRoadDistanceResult(cached);
+      return;
+    }
+
+    let isMounted = true;
+    setIsCalculatingRoad(true);
+
+    RoadRoutingService.calculateRoadDistance(userCoordinates, targetWorkerCoord, lang)
+      .then((res) => {
+        if (isMounted) {
+          setRoadDistanceResult(res);
+          setIsCalculatingRoad(false);
+        }
+      })
+      .catch(() => {
+        if (isMounted) {
+          setIsCalculatingRoad(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [userCoordinates?.lat, userCoordinates?.lng, targetWorkerCoord?.lat, targetWorkerCoord?.lng, lang]);
 
   const handleMessageClick = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -387,14 +414,28 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                   className="text-xs sm:text-sm font-semibold text-[#222b31] leading-tight"
                   style={{ fontSize: '14px', marginLeft: '0px', marginRight: '5px' }}
                 >
-                  {lang === 'hi' ? 'दूरी' : 'Distance'}
+                  {lang === 'hi' ? 'दूरी (सड़क मार्ग)' : 'Distance (by road)'}
                 </p>
-                <p
+                <div
                   className="text-xs sm:text-sm font-bold text-[#222b31] mt-0.5 leading-tight"
-                  style={{ fontSize: '14px', marginLeft: '0px', marginRight: '5px' }}
+                  style={{ fontSize: '13px', marginLeft: '0px', marginRight: '5px' }}
                 >
-                  {distanceText || '—'}
-                </p>
+                  {roadDistanceResult?.success ? (
+                    <span>{roadDistanceResult.formattedCardDistance}</span>
+                  ) : isCalculatingRoad ? (
+                    <span className="text-slate-500 font-medium text-xs">
+                      {lang === 'hi' ? 'दूरी लोड हो रही है...' : 'Calculating distance...'}
+                    </span>
+                  ) : userCoordinates && targetWorkerCoord ? (
+                    <span className="text-slate-500 font-medium text-[11px] sm:text-xs">
+                      {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                    </span>
+                  ) : (
+                    <span className="text-slate-400 font-medium text-xs">
+                      {lang === 'hi' ? 'सड़क मार्ग की दूरी उपलब्ध नहीं है' : 'Road distance unavailable'}
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
           )}
@@ -524,38 +565,6 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                     <QrCode className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-[#e2cfa7] shrink-0" />
                     <span className="text-xs sm:text-sm font-semibold text-[#e2cfa7]">
                       {lang === 'hi' ? 'QR' : 'QR'}
-                    </span>
-                  </button>
-                </div>
-
-                {/* Favorite Heart Button */}
-                <div className="bg-[#bca071] rounded-xl p-[2px] shadow-[0_5px_10px_rgba(0,0,0,0.18),inset_0_2px_4px_rgba(255,255,255,0.4)] shrink-0">
-                  <button
-                    type="button"
-                    onClick={handleFavoriteClick}
-                    className={`h-full rounded-[10px] py-2 sm:py-2.5 px-2.5 sm:px-3 flex items-center justify-center gap-1.5 shadow-[inset_0_2px_4px_rgba(255,255,255,0.22),inset_0_-2px_4px_rgba(0,0,0,0.3)] hover:brightness-105 active:scale-[0.98] transition cursor-pointer ${
-                      isFavorite
-                        ? 'bg-gradient-to-b from-[#be123c] to-[#881337] text-white'
-                        : 'bg-gradient-to-b from-[#527c54] to-[#2b4f30] text-[#e2cfa7]'
-                    }`}
-                    title={
-                      isFavorite
-                        ? lang === 'hi'
-                          ? 'पसंदीदा से हटाएं (Remove Favorite)'
-                          : 'Remove from Favorites'
-                        : lang === 'hi'
-                        ? 'पसंदीदा में जोड़ें (Add to Favorites)'
-                        : 'Add to Favorites'
-                    }
-                    aria-label={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
-                  >
-                    <Heart
-                      className={`w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 transition-transform ${
-                        isFavorite ? 'fill-white text-white scale-110' : 'text-[#e2cfa7]'
-                      }`}
-                    />
-                    <span className="text-xs sm:text-sm font-semibold">
-                      {isFavorite ? (lang === 'hi' ? 'पसंदीदा' : 'Saved') : (lang === 'hi' ? 'पसंद' : 'Save')}
                     </span>
                   </button>
                 </div>
