@@ -11,7 +11,7 @@ export interface WebsiteBranding {
 export const DEFAULT_BRANDING: WebsiteBranding = {
   name_en: 'Kaam Mitra',
   name_hi: 'काम मित्र',
-  logo_url: '/logo.jpg',
+  logo_url: null,
   share_url: null,
 };
 
@@ -33,10 +33,13 @@ class BrandingStore {
       if (stored) {
         const parsed = JSON.parse(stored);
         if (parsed && typeof parsed.name_en === 'string' && typeof parsed.name_hi === 'string') {
+          const rawLogo = typeof parsed.logo_url === 'string' && parsed.logo_url.trim() ? parsed.logo_url.trim() : null;
+          // Filter out stale placeholder logo.jpg so it doesn't linger
+          const cleanLogo = rawLogo === '/logo.jpg' || rawLogo === 'logo.jpg' ? null : rawLogo;
           return {
             name_en: parsed.name_en.trim() || DEFAULT_BRANDING.name_en,
             name_hi: parsed.name_hi.trim() || DEFAULT_BRANDING.name_hi,
-            logo_url: typeof parsed.logo_url === 'string' && parsed.logo_url.trim() ? parsed.logo_url.trim() : DEFAULT_BRANDING.logo_url,
+            logo_url: cleanLogo,
             share_url: typeof parsed.share_url === 'string' && parsed.share_url.trim() ? parsed.share_url.trim() : null,
           };
         }
@@ -60,7 +63,10 @@ class BrandingStore {
   }
 
   getLogoUrl(): string | null {
-    return this.branding.logo_url || '/logo.jpg';
+    if (!this.branding.logo_url || this.branding.logo_url === '/logo.jpg' || this.branding.logo_url === 'logo.jpg') {
+      return null;
+    }
+    return this.branding.logo_url;
   }
 
   getShareUrl(): string | null {
@@ -115,10 +121,14 @@ class BrandingStore {
 
   updateDocumentMeta() {
     if (typeof document === 'undefined') return;
-    const exactName = (this.branding.name_en || this.branding.name_hi || DEFAULT_BRANDING.name_en).trim();
-    const effectiveLogo = this.branding.logo_url || '/logo.jpg';
+    const nameEn = (this.branding.name_en || DEFAULT_BRANDING.name_en).trim();
+    const nameHi = (this.branding.name_hi || DEFAULT_BRANDING.name_hi).trim();
+    const combinedName = this.getCombinedName();
+    const exactName = combinedName || nameEn || nameHi;
+    const hasCustomLogo = Boolean(this.branding.logo_url && this.branding.logo_url !== '/logo.jpg' && this.branding.logo_url !== 'logo.jpg');
+    const effectiveLogo = hasCustomLogo ? this.branding.logo_url! : null;
 
-    document.title = exactName;
+    document.title = combinedName || exactName;
 
     const setMeta = (selector: string, attr: string, value: string) => {
       let el = document.querySelector(selector);
@@ -147,16 +157,27 @@ class BrandingStore {
     setMeta('meta[property="og:title"]', 'content', exactName);
     setMeta('meta[property="og:site_name"]', 'content', exactName);
     setMeta('meta[name="twitter:title"]', 'content', exactName);
-    setMeta('meta[name="apple-mobile-web-app-title"]', 'content', exactName);
-    setMeta('meta[name="application-name"]', 'content', exactName);
+    setMeta('meta[name="apple-mobile-web-app-title"]', 'content', nameEn);
+    setMeta('meta[name="application-name"]', 'content', nameEn);
     setMeta('meta[property="og:url"]', 'content', this.getResolvedShareUrl());
-    setMeta('meta[property="og:image"]', 'content', effectiveLogo);
-    setMeta('meta[name="twitter:image"]', 'content', effectiveLogo);
 
-    // Dynamic browser & PWA icon updates
-    setLink('icon', effectiveLogo);
-    setLink('apple-touch-icon', effectiveLogo);
-    setLink('shortcut icon', effectiveLogo);
+    if (effectiveLogo) {
+      const cacheBust = effectiveLogo.startsWith('data:')
+        ? effectiveLogo
+        : `${effectiveLogo}${effectiveLogo.includes('?') ? '&' : '?'}v=${Date.now()}`;
+      setMeta('meta[property="og:image"]', 'content', effectiveLogo);
+      setMeta('meta[name="twitter:image"]', 'content', effectiveLogo);
+      setLink('icon', cacheBust);
+      setLink('shortcut icon', cacheBust);
+      setLink('apple-touch-icon', cacheBust);
+    } else {
+      setMeta('meta[property="og:image"]', 'content', '/pwa-192x192.png');
+      setMeta('meta[name="twitter:image"]', 'content', '/pwa-192x192.png');
+      setLink('icon', '/favicon.ico');
+      setLink('shortcut icon', '/favicon.ico');
+      setLink('apple-touch-icon', '/apple-touch-icon.png');
+    }
+
     setLink('manifest', `/manifest.webmanifest?v=${Date.now()}`);
   }
 
@@ -164,10 +185,21 @@ class BrandingStore {
    * Set and persist branding locally and to Supabase
    */
   async setBranding(newBranding: Partial<WebsiteBranding>): Promise<{ success: boolean; error?: string }> {
+    let rawLogo: string | null = null;
+    if (newBranding.logo_url !== undefined) {
+      if (newBranding.logo_url && newBranding.logo_url !== '/logo.jpg' && newBranding.logo_url !== 'logo.jpg') {
+        rawLogo = newBranding.logo_url.trim();
+      } else {
+        rawLogo = null;
+      }
+    } else {
+      rawLogo = this.branding.logo_url && this.branding.logo_url !== '/logo.jpg' ? this.branding.logo_url : null;
+    }
+
     const updated: WebsiteBranding = {
       name_en: (newBranding.name_en !== undefined ? newBranding.name_en.trim() : this.branding.name_en) || DEFAULT_BRANDING.name_en,
       name_hi: (newBranding.name_hi !== undefined ? newBranding.name_hi.trim() : this.branding.name_hi) || DEFAULT_BRANDING.name_hi,
-      logo_url: newBranding.logo_url !== undefined ? newBranding.logo_url : (this.branding.logo_url ?? null),
+      logo_url: rawLogo,
       share_url: newBranding.share_url !== undefined ? (newBranding.share_url ? newBranding.share_url.trim() : null) : (this.branding.share_url ?? null),
     };
 
@@ -187,7 +219,7 @@ class BrandingStore {
     }
 
     try {
-      // Persist to Supabase in admin_settings table row 'app_branding'
+      // 1. Persist to Supabase in admin_settings table row 'app_branding'
       const { error } = await supabase.from('admin_settings').upsert({
         id: 'app_branding',
         home_welcome_en: updated.name_en,
@@ -197,9 +229,18 @@ class BrandingStore {
         updated_at: new Date().toISOString(),
       });
 
+      // 2. ALSO update row 'general' so AdminService and legacy readers are synchronized
+      await supabase.from('admin_settings').upsert({
+        id: 'general',
+        home_welcome_en: `Welcome to ${updated.name_en}`,
+        home_welcome_hi: `${updated.name_hi} आपका स्वागत करता है`,
+        about_kaammitra_en: `${updated.name_en} connects skilled village and local service providers with people who need quality services without middlemen.`,
+        about_kaammitra_hi: `${updated.name_hi} (${updated.name_en}) ग्रामीण एवं कस्बाई क्षेत्रों के कुशल सेवा प्रदाताओं और जरूरतमंद लोगों को जोड़ने का एक सीधा, निःशुल्क व विश्वसनीय मंच है।`,
+        updated_at: new Date().toISOString(),
+      });
+
       if (error) {
         console.warn('[BrandingStore] Remote update warning:', error.message);
-        // Note: local state & storage is already saved and will persist for current user
         return { success: true };
       }
       return { success: true };
@@ -235,7 +276,9 @@ class BrandingStore {
             const parsed = JSON.parse(data.about_kaammitra_en);
             if (parsed.name_en) name_en = parsed.name_en;
             if (parsed.name_hi) name_hi = parsed.name_hi;
-            if (parsed.logo_url !== undefined) logo_url = parsed.logo_url;
+            if (parsed.logo_url !== undefined) {
+              logo_url = parsed.logo_url && parsed.logo_url !== '/logo.jpg' && parsed.logo_url !== 'logo.jpg' ? parsed.logo_url : null;
+            }
             if (parsed.share_url !== undefined) share_url = parsed.share_url;
           } catch {}
         }

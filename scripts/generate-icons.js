@@ -15,15 +15,25 @@ const supabaseKey =
   process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   'sb_publishable_cdXk34V8WeafviYplVRbig_fcDmRDj0';
 
+const DEFAULT_BRAND_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="104" fill="#0f766e"/>
+  <g transform="translate(64, 64) scale(8)">
+    <path d="M22 28 C15 28 6 22 5 12 C13 12 21 18 22 28 Z" fill="#84cc16"/>
+    <path d="M26 28 C33 28 42 22 43 12 C35 12 27 18 26 28 Z" fill="#22c55e"/>
+    <circle cx="24" cy="9" r="4.2" fill="#ffffff"/>
+    <path d="M14 16 C17 23 24 25.5 24 37 C24 25.5 31 23 34 16" stroke="#ffffff" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>`;
+
 /**
  * Fetch current active branding from Supabase admin_settings
  */
 export async function fetchRemoteBranding() {
   const fallback = {
-    name: 'Talent',
-    short_name: 'Talent',
-    name_en: 'Talent',
-    name_hi: 'टैलेंट',
+    name: 'Kaam Mitra',
+    short_name: 'Kaam Mitra',
+    name_en: 'Kaam Mitra',
+    name_hi: 'काम मित्र',
     logo_url: null,
   };
 
@@ -55,7 +65,9 @@ export async function fetchRemoteBranding() {
             const parsed = JSON.parse(row.about_kaammitra_en);
             if (parsed.name_en) nameEn = parsed.name_en;
             if (parsed.name_hi) nameHi = parsed.name_hi;
-            if (parsed.logo_url) logoUrl = parsed.logo_url;
+            if (parsed.logo_url && parsed.logo_url !== '/logo.jpg' && parsed.logo_url !== 'logo.jpg') {
+              logoUrl = parsed.logo_url;
+            }
           } catch {}
         }
 
@@ -83,6 +95,11 @@ export async function fetchRemoteBranding() {
  * Convert any logo input (URL, base64 Data URL, or Buffer) to a raw image Buffer
  */
 async function resolveImageBuffer(logoSource) {
+  // If explicitly null, empty, or stale logo.jpg, return default brand SVG
+  if (!logoSource || logoSource === '/logo.jpg' || logoSource === 'logo.jpg') {
+    return Buffer.from(DEFAULT_BRAND_SVG);
+  }
+
   // 1. Buffer directly provided
   if (Buffer.isBuffer(logoSource)) {
     return logoSource;
@@ -107,18 +124,14 @@ async function resolveImageBuffer(logoSource) {
           return buf;
         }
       }
-      console.warn(`[generate-icons.js] Remote logo fetch returned status ${res.status}, falling back to default logo.jpg`);
+      console.warn(`[generate-icons.js] Remote logo fetch returned status ${res.status}, falling back to default brand logo`);
     } catch (err) {
       console.warn('[generate-icons.js] Failed to fetch remote logo URL:', err);
     }
   }
 
-  // 4. Default fallback: public/logo.jpg
-  if (fs.existsSync(defaultLogoPath)) {
-    return fs.readFileSync(defaultLogoPath);
-  }
-
-  throw new Error(`Default logo file not found at ${defaultLogoPath}`);
+  // 4. Default fallback: vector brand SVG
+  return Buffer.from(DEFAULT_BRAND_SVG);
 }
 
 /**
@@ -208,7 +221,7 @@ export async function generatePwaIcons(logoSource) {
     }
   }
 
-  const sourceDesc = targetSource ? (typeof targetSource === 'string' ? targetSource : 'Buffer') : 'public/logo.jpg (default)';
+  const sourceDesc = targetSource ? (typeof targetSource === 'string' ? targetSource : 'Buffer') : 'Default Brand Logo SVG';
   console.log(`[generate-icons.js] Successfully generated PWA icons using source: ${sourceDesc}`);
 
   return {

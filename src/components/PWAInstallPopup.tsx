@@ -4,6 +4,7 @@ import { usePWAInstall } from '../hooks/usePWAInstall';
 import { useTranslation } from '../hooks/useTranslation';
 import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
 import { safeStorage } from '../lib/storage';
+import { TalentBrandLogo } from './WorkerCertificateCard';
 
 const DISMISS_KEY = 'kaammitra_pwa_popup_dismissed_at';
 const DISMISS_COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -95,15 +96,18 @@ export const PWAInstallPopup: React.FC = () => {
 
             {/* App Icon and Heading */}
             <div className="flex items-center gap-3.5 mb-3">
-              <div className="w-14 h-14 rounded-2xl overflow-hidden shadow-md border-2 border-teal-600 shrink-0 bg-teal-50 flex items-center justify-center">
-                <img
-                  src={logoUrl || '/logo.jpg'}
-                  alt="App Logo"
-                  className="w-full h-full object-cover"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).src = '/pwa-192x192.png';
-                  }}
-                />
+              <div className="w-14 h-14 rounded-2xl overflow-hidden shadow-md border-2 border-teal-600 shrink-0 bg-white flex items-center justify-center p-1">
+                {logoUrl && logoUrl !== '/logo.jpg' && logoUrl !== 'logo.jpg' ? (
+                  <img
+                    src={logoUrl}
+                    alt="App Logo"
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <div className="w-full h-full rounded-xl bg-teal-800 flex items-center justify-center p-1">
+                    <TalentBrandLogo size={32} logoUrl={null} />
+                  </div>
+                )}
               </div>
               <div>
                 <h3 className="text-base font-bold text-slate-900 tracking-tight leading-snug">

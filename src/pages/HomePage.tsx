@@ -222,7 +222,7 @@ export const HomePage: React.FC<HomePageProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [lang]);
+  }, [lang, websiteName, websiteNameEn, websiteNameHi]);
 
   // Helper to ensure filters have user coordinates when radiusKm is specified
   const attachUserCoordsToFilters = useCallback(
@@ -349,6 +349,9 @@ export const HomePage: React.FC<HomePageProps> = ({
                 .replace(/काम\s*मित्र/g, websiteNameHi)
                 .replace(/Kaam\s*Mitra/gi, websiteNameEn)
                 .replace(/KaamMitra/gi, websiteNameEn)
+                .replace(/LocalConnection/gi, websiteNameEn)
+                .replace(/Talent/gi, websiteNameEn)
+                .replace(/टैलेंट/g, websiteNameHi)
             : lang === 'hi'
             ? `${websiteName} आपका स्वागत करता है`
             : `Welcome to ${websiteName}`}

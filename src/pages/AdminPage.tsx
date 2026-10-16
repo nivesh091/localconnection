@@ -743,6 +743,9 @@ export const AdminPage: React.FC = () => {
       });
 
       if (res.success) {
+        AdminService.invalidateSettingsCache();
+        setWelcomeHi(`${hi || DEFAULT_BRANDING.name_hi} आपका स्वागत करता है`);
+        setWelcomeEn(`Welcome to ${en || DEFAULT_BRANDING.name_en}`);
         setNotice({ type: 'success', text: 'वेबसाइट सेटिंग्स (नाम व शेयर URL) सफलतापूर्वक अपडेट की गईं।' });
       } else {
         setNotice({ type: 'error', text: res.error || 'वेबसाइट सेटिंग्स सहेजने में विफल।' });
@@ -762,6 +765,9 @@ export const AdminPage: React.FC = () => {
     setIsSavingBranding(true);
     try {
       await updateBranding({ ...DEFAULT_BRANDING, share_url: null });
+      AdminService.invalidateSettingsCache();
+      setWelcomeHi(`${DEFAULT_BRANDING.name_hi} आपका स्वागत करता है`);
+      setWelcomeEn(`Welcome to ${DEFAULT_BRANDING.name_en}`);
       setNotice({ type: 'success', text: 'वेबसाइट का नाम व शेयर URL डिफ़ॉल्ट पर रीसेट कर दिया गया।' });
     } finally {
       setIsSavingBranding(false);
@@ -1428,7 +1434,7 @@ export const AdminPage: React.FC = () => {
                 type="text"
                 value={siteNameEn}
                 onChange={(e) => setSiteNameEn(e.target.value)}
-                placeholder="उदा. Talent या Kaam Mitra"
+                placeholder="उदा. MyBrand या Kaam Mitra"
                 className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-teal-700 bg-white font-medium"
               />
               <p className="text-[11px] text-slate-400">
@@ -1445,7 +1451,7 @@ export const AdminPage: React.FC = () => {
                 type="text"
                 value={siteNameHi}
                 onChange={(e) => setSiteNameHi(e.target.value)}
-                placeholder="उदा. टैलेंट या काम मित्र"
+                placeholder="उदा. मायब्रांड या काम मित्र"
                 className="w-full px-3.5 py-2.5 border border-slate-300 rounded-xl text-sm focus:outline-none focus:border-teal-700 bg-white font-medium"
               />
               <p className="text-[11px] text-slate-400">
@@ -1587,7 +1593,7 @@ export const AdminPage: React.FC = () => {
                   />
                 ) : (
                   <div className="w-full h-full rounded-xl bg-teal-800 flex items-center justify-center p-2 shadow-2xs">
-                    <TalentBrandLogo size={48} />
+                    <TalentBrandLogo size={48} logoUrl={null} />
                   </div>
                 )}
               </div>

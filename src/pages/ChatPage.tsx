@@ -289,7 +289,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
 }) => {
   const { user, isAdmin } = useAuth();
   const { t, lang } = useTranslation();
-  const { websiteName } = useWebsiteBranding();
+  const { websiteName, logoUrl } = useWebsiteBranding();
 
   const [otherUser, setOtherUser] = useState<UserProfile | null>(() => {
     return ChatService.getCachedOtherUser(conversationId);
@@ -1372,7 +1372,11 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                 title="प्रोफ़ाइल देखें"
               >
                 {isOtherAdmin ? (
-                  <Shield className="w-5 h-5 text-amber-700" />
+                  logoUrl ? (
+                    <img src={logoUrl} alt="Admin Logo" className="w-full h-full object-contain p-0.5" />
+                  ) : (
+                    <Shield className="w-5 h-5 text-amber-700" />
+                  )
                 ) : photo ? (
                   <img src={photo} alt={name} className="w-full h-full object-cover" />
                 ) : (

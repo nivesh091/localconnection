@@ -564,7 +564,8 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                   <button
                     type="button"
                     onClick={handleMessageClick}
-                    className="w-full bg-gradient-to-r from-teal-700 to-emerald-800 hover:from-teal-800 hover:to-emerald-900 active:scale-[0.98] text-white rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-xs transition cursor-pointer"
+                    style={{ backgroundColor: '#0b6e32' }}
+                    className="w-full bg-[#0b6e32] active:scale-[0.98] text-white rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-xs transition cursor-pointer"
                   >
                     <MessageSquare className="w-3.5 h-3.5 sm:w-4 sm:h-4 text-emerald-100 shrink-0" />
                     <span className="text-xs sm:text-sm font-semibold text-white">
@@ -579,7 +580,8 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                     <button
                       type="button"
                       onClick={handleCallClick}
-                      className="w-full bg-emerald-600 hover:bg-emerald-700 active:scale-[0.98] text-white rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-xs transition cursor-pointer"
+                      style={{ backgroundColor: '#0b6e32' }}
+                      className="w-full bg-[#0b6e32] active:scale-[0.98] text-white rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-xs transition cursor-pointer"
                       title={lang === 'hi' ? 'कॉल करें' : 'Call'}
                     >
                       <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-emerald-100" />

@@ -40,7 +40,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 }) => {
   const { user } = useAuth();
   const { t, lang } = useTranslation();
-  const { websiteName } = useWebsiteBranding();
+  const { websiteName, logoUrl } = useWebsiteBranding();
 
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     try {
@@ -560,7 +560,11 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                   }`}
                 >
                   {isAdm ? (
-                    <Shield className="w-6 h-6 text-amber-700" />
+                    logoUrl ? (
+                      <img src={logoUrl} alt="Admin Logo" className="w-full h-full object-contain p-1" />
+                    ) : (
+                      <Shield className="w-6 h-6 text-amber-700" />
+                    )
                   ) : photo ? (
                     <img src={photo} alt={name} className="w-full h-full object-cover" />
                   ) : (

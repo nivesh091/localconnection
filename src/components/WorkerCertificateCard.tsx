@@ -12,7 +12,7 @@ import {
 import QRCode from 'qrcode';
 import { WorkerProfile, UserProfile, getPriceUnitLabel } from '../types';
 import { LocationService } from '../services/locationService';
-import { brandingStore } from '../services/brandingService';
+import { brandingStore, DEFAULT_BRANDING } from '../services/brandingService';
 import { supabase } from '../lib/supabase';
 import { ProfileService } from '../services/profileService';
 import verificationLogo from '@/verificationlogo.png';
@@ -48,9 +48,9 @@ export const TalentBrandLogo: React.FC<{ size?: number; className?: string; logo
   className = '',
   logoUrl: propLogoUrl,
 }) => {
-  const currentLogo = propLogoUrl !== undefined ? propLogoUrl : brandingStore.getLogoUrl();
+  const currentLogo = propLogoUrl !== undefined ? propLogoUrl : (brandingStore.getLogoUrl() || null);
 
-  if (currentLogo) {
+  if (currentLogo && currentLogo !== '/logo.jpg' && currentLogo !== 'logo.jpg') {
     return (
       <img
         src={currentLogo}
@@ -264,11 +264,12 @@ export function resolveWorkerCertificateData(
     ? `${window.location.origin}/?worker=${encodeURIComponent(worker.user_id)}`
     : '';
 
-  const brandEn = branding?.websiteNameEn || branding?.name_en || 'Talent';
-  const brandHi = branding?.websiteNameHi || branding?.name_hi || 'टैलेंट';
+  const brandEn = branding?.websiteNameEn || branding?.name_en || DEFAULT_BRANDING.name_en;
+  const brandHi = branding?.websiteNameHi || branding?.name_hi || DEFAULT_BRANDING.name_hi;
   const brandCombined = branding?.websiteNameCombined || `${brandHi} — ${brandEn}`;
   const brandName = branding?.websiteName || (lang === 'hi' ? brandHi : brandEn);
-  const brandLogo = branding?.logoUrl !== undefined ? branding.logoUrl : (branding?.logo_url || null);
+  const rawBrandLogo = branding?.logoUrl !== undefined ? branding.logoUrl : (branding?.logo_url || null);
+  const brandLogo = rawBrandLogo && rawBrandLogo !== '/logo.jpg' && rawBrandLogo !== 'logo.jpg' ? rawBrandLogo : null;
 
   return {
     name,
@@ -450,9 +451,9 @@ export async function renderCertificateToCanvas(
   canvas.width = width;
   canvas.height = height;
 
-  // Preload custom logo image if provided or default /logo.jpg
+  // Preload custom logo image if provided by admin
   let customLogoImg: HTMLImageElement | null = null;
-  const targetLogoUrl = data.logoUrl || '/logo.jpg';
+  const targetLogoUrl = data.logoUrl && data.logoUrl !== '/logo.jpg' && data.logoUrl !== 'logo.jpg' ? data.logoUrl : null;
   if (targetLogoUrl) {
     customLogoImg = await loadCorsSafeImage(targetLogoUrl);
   }
@@ -1198,7 +1199,7 @@ export async function downloadCertificateCard(data: CertificateData): Promise<vo
   await renderCertificateToCanvas(canvas, data);
 
   const safeWorkerName = data.name.replace(/[^a-zA-Z0-9\u0900-\u097F]/g, '_');
-  const safeAppName = (data.websiteNameEn || 'Talent').replace(/[^a-zA-Z0-9]/g, '_');
+  const safeAppName = (data.websiteNameEn || DEFAULT_BRANDING.name_en).replace(/[^a-zA-Z0-9]/g, '_');
   const downloadLink = document.createElement('a');
   downloadLink.download = `${safeAppName}_${safeWorkerName}_QR.png`;
   downloadLink.href = canvas.toDataURL('image/png');

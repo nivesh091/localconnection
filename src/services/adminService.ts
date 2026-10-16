@@ -1,5 +1,6 @@
 import { supabase, ADMIN_EMAIL, ADMIN_CONTACT_DEFAULT, isSchemaCacheError } from '../lib/supabase';
 import { safeStorage } from '../lib/storage';
+import { brandingStore } from './brandingService';
 import {
   UserProfile,
   WorkerProfile,
@@ -53,6 +54,9 @@ export class AdminService {
           localReqMapOverride = safeStorage.getItem('admin_show_requirements_on_map') === 'true';
         } catch {}
 
+        const currentNameHi = brandingStore.getName('hi');
+        const currentNameEn = brandingStore.getName('en');
+
         if (error || !data) {
           if (error) isSchemaCacheError(error);
           const fallback: AdminSettings = {
@@ -60,11 +64,11 @@ export class AdminService {
             admin_call_enabled: false, // SECURE DEFAULT: NEVER true on fallback/unknown
             admin_contact_number: '',  // SECURE DEFAULT: NEVER expose number on fallback/unknown
             about_kaammitra_hi:
-              'काम मित्र (KaamMitra) ग्रामीण एवं कस्बाई क्षेत्रों के कुशल सेवा प्रदाताओं और जरूरतमंद लोगों को जोड़ने का एक सीधा, निःशुल्क व विश्वसनीय मंच है।',
+              `${currentNameHi} (${currentNameEn}) ग्रामीण एवं कस्बाई क्षेत्रों के कुशल सेवा प्रदाताओं और जरूरतमंद लोगों को जोड़ने का एक सीधा, निःशुल्क व विश्वसनीय मंच है।`,
             about_kaammitra_en:
-              'KaamMitra connects skilled village and local service providers with people who need quality services without middlemen.',
-            home_welcome_hi: 'काम मित्र आपका स्वागत करता है',
-            home_welcome_en: 'Welcome to KaamMitra',
+              `${currentNameEn} connects skilled village and local service providers with people who need quality services without middlemen.`,
+            home_welcome_hi: `${currentNameHi} आपका स्वागत करता है`,
+            home_welcome_en: `Welcome to ${currentNameEn}`,
             chat_retention_days: 30,
             show_requirements_on_map: localReqMapOverride,
             updated_at: new Date().toISOString(),
@@ -78,8 +82,44 @@ export class AdminService {
             ? Boolean(data.show_requirements_on_map)
             : localReqMapOverride;
 
+        const resolvedWelcomeHi = (data.home_welcome_hi || '')
+          .replace(/काम\s*मित्र/g, currentNameHi)
+          .replace(/Kaam\s*Mitra/gi, currentNameEn)
+          .replace(/KaamMitra/gi, currentNameEn)
+          .replace(/LocalConnection/gi, currentNameEn)
+          .replace(/Talent/gi, currentNameEn)
+          .replace(/टैलेंट/g, currentNameHi) || `${currentNameHi} आपका स्वागत करता है`;
+
+        const resolvedWelcomeEn = (data.home_welcome_en || '')
+          .replace(/काम\s*मित्र/g, currentNameHi)
+          .replace(/Kaam\s*Mitra/gi, currentNameEn)
+          .replace(/KaamMitra/gi, currentNameEn)
+          .replace(/LocalConnection/gi, currentNameEn)
+          .replace(/Talent/gi, currentNameEn)
+          .replace(/टैलेंट/g, currentNameHi) || `Welcome to ${currentNameEn}`;
+
+        const resolvedAboutHi = (data.about_kaammitra_hi || '')
+          .replace(/काम\s*मित्र/g, currentNameHi)
+          .replace(/Kaam\s*Mitra/gi, currentNameEn)
+          .replace(/KaamMitra/gi, currentNameEn)
+          .replace(/LocalConnection/gi, currentNameEn)
+          .replace(/Talent/gi, currentNameEn)
+          .replace(/टैलेंट/g, currentNameHi);
+
+        const resolvedAboutEn = (data.about_kaammitra_en || '')
+          .replace(/काम\s*मित्र/g, currentNameHi)
+          .replace(/Kaam\s*Mitra/gi, currentNameEn)
+          .replace(/KaamMitra/gi, currentNameEn)
+          .replace(/LocalConnection/gi, currentNameEn)
+          .replace(/Talent/gi, currentNameEn)
+          .replace(/टैलेंट/g, currentNameHi);
+
         const mergedData: AdminSettings = {
           ...data,
+          home_welcome_hi: resolvedWelcomeHi,
+          home_welcome_en: resolvedWelcomeEn,
+          about_kaammitra_hi: resolvedAboutHi || data.about_kaammitra_hi,
+          about_kaammitra_en: resolvedAboutEn || data.about_kaammitra_en,
           show_requirements_on_map: resolvedShowReqsOnMap,
         };
 
@@ -92,14 +132,16 @@ export class AdminService {
         } catch {}
 
         if (cachedAdminSettings) return cachedAdminSettings.data;
+        const currentNameHi = brandingStore.getName('hi');
+        const currentNameEn = brandingStore.getName('en');
         const fallback: AdminSettings = {
           id: 'general',
           admin_call_enabled: false, // SECURE DEFAULT: NEVER true on fallback/unknown
           admin_contact_number: '',  // SECURE DEFAULT: NEVER expose number on fallback/unknown
-          about_kaammitra_hi: 'काम मित्र (KaamMitra)',
-          about_kaammitra_en: 'KaamMitra',
-          home_welcome_hi: 'काम मित्र आपका स्वागत करता है',
-          home_welcome_en: 'Welcome to KaamMitra',
+          about_kaammitra_hi: `${currentNameHi} (${currentNameEn})`,
+          about_kaammitra_en: currentNameEn,
+          home_welcome_hi: `${currentNameHi} आपका स्वागत करता है`,
+          home_welcome_en: `Welcome to ${currentNameEn}`,
           chat_retention_days: 30,
           show_requirements_on_map: localReqMapOverride,
           updated_at: new Date().toISOString(),

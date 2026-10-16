@@ -44,13 +44,22 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <Menu className="w-5 h-5" />
           </button>
-          <div
-            className="hidden w-7 h-7 sm:w-8 sm:h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0 bg-teal-800 p-0.5 shadow-2xs"
-            style={{ display: 'none' }}
-            title={websiteName}
-          >
-            <TalentBrandLogo size={22} logoUrl={logoUrl} />
-          </div>
+          {/* Website Logo in Header */}
+          {logoUrl ? (
+            <img
+              src={logoUrl}
+              alt={websiteName}
+              title={websiteName}
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg object-contain shrink-0 border border-slate-200 bg-white p-0.5 shadow-2xs"
+            />
+          ) : (
+            <div
+              className="w-7 h-7 sm:w-8 sm:h-8 rounded-lg overflow-hidden flex items-center justify-center shrink-0 bg-teal-800 p-0.5 shadow-2xs"
+              title={websiteName}
+            >
+              <TalentBrandLogo size={22} logoUrl={null} />
+            </div>
+          )}
         </div>
 
         {/* CENTER: Greeting with single-line truncation + Verification Logo by default */}

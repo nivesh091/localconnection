@@ -6,6 +6,7 @@ import { HelpService } from '../services/helpService';
 import { VoiceRecorder } from './VoiceRecorder';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
+import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
 
 interface GetHelpCardProps {
   showCallHelpline?: boolean;
@@ -14,6 +15,7 @@ interface GetHelpCardProps {
 export const GetHelpCard: React.FC<GetHelpCardProps> = ({ showCallHelpline = true }) => {
   const { user } = useAuth();
   const { t } = useTranslation();
+  const { websiteName } = useWebsiteBranding();
 
   const [settings, setSettings] = useState<AdminSettings | null>(null);
   const [voiceBlob, setVoiceBlob] = useState<Blob | null>(null);
@@ -102,7 +104,7 @@ export const GetHelpCard: React.FC<GetHelpCardProps> = ({ showCallHelpline = tru
           <CheckCircle className="w-12 h-12 text-emerald-600 mx-auto" />
           <h3 className="text-base font-bold text-slate-900">सहायता संदेश प्राप्त हो गया है!</h3>
           <p className="text-xs text-slate-600">
-            काम मित्र टीम आपके आवाज संदेश को सुनकर जल्द ही सहायता उपलब्ध कराएगी।
+            {websiteName} टीम आपके आवाज संदेश को सुनकर जल्द ही सहायता उपलब्ध कराएगी।
           </p>
           <button
             type="button"

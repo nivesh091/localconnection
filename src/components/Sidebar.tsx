@@ -182,7 +182,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
             ) : (
               <div className="w-9 h-9 rounded-xl bg-teal-800 flex items-center justify-center shrink-0 p-1 shadow-2xs">
-                <TalentBrandLogo size={28} />
+                <TalentBrandLogo size={28} logoUrl={null} />
               </div>
             )}
             <div className="min-w-0">
@@ -361,6 +361,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     .replace(/काम\s*मित्र/g, websiteNameHi)
                     .replace(/Kaam\s*Mitra/gi, websiteNameEn)
                     .replace(/KaamMitra/gi, websiteNameEn)
+                    .replace(/LocalConnection/gi, websiteNameEn)
+                    .replace(/Talent/gi, websiteNameEn)
+                    .replace(/टैलेंट/g, websiteNameHi)
                 : lang === 'hi'
                 ? `${websiteName} ग्रामीण एवं कस्बाई क्षेत्रों के कुशल सेवा विशेषज्ञों और जरूरतमंद लोगों को जोड़ने का एक सीधा, निःशुल्क व विश्वसनीय मंच है।`
                 : `${websiteName} connects skilled village and local service professionals with people who need quality services without middlemen.`}
