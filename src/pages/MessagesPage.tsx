@@ -8,7 +8,6 @@ import {
   Search,
   Bell,
   X,
-  Pin,
   Loader2,
 } from 'lucide-react';
 import { Conversation, UserNotification } from '../types';
@@ -40,7 +39,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 }) => {
   const { user } = useAuth();
   const { t, lang } = useTranslation();
-  const { websiteName, logoUrl } = useWebsiteBranding();
+  const { websiteName, logoUrl, adminName, adminPhotoUrl } = useWebsiteBranding();
 
   const [conversations, setConversations] = useState<Conversation[]>(() => {
     try {
@@ -365,16 +364,12 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // Admin conversation pinned at top; regular conversations sorted by most recent activity timestamp
-  const adminConvs = conversations.filter((c) => isAdminConversation(c));
-  const regularConvs = conversations
-    .filter((c) => !isAdminConversation(c))
-    .sort((a, b) => {
-      const timeA = new Date(a.latest_message?.created_at || a.last_message_at || a.created_at).getTime();
-      const timeB = new Date(b.latest_message?.created_at || b.last_message_at || b.created_at).getTime();
-      return timeB - timeA;
-    });
-  const allSortedConvs = [...adminConvs, ...regularConvs];
+  // All conversations (including Admin) sorted according to existing sorting rules by most recent activity timestamp
+  const allSortedConvs = [...conversations].sort((a, b) => {
+    const timeA = new Date(a.latest_message?.created_at || a.last_message_at || a.created_at).getTime();
+    const timeB = new Date(b.latest_message?.created_at || b.last_message_at || b.created_at).getTime();
+    return timeB - timeA;
+  });
 
   const displayList = allSortedConvs.filter((c) => {
     if (!searchQuery.trim()) return true;
@@ -382,7 +377,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     const isAdm = isAdminConversation(c);
     const other = c.other_user;
     const name = isAdm
-      ? (lang === 'hi' ? `${websiteName} एडमिन` : `${websiteName} Admin`).toLowerCase()
+      ? adminName.toLowerCase()
       : (other?.name || '').toLowerCase();
     const mobile = (other?.mobile || '').toLowerCase();
     const latestText = (c.latest_message?.message_text || '').toLowerCase();
@@ -524,7 +519,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
               !isAdm &&
               (Boolean(other?.is_worker) || (Boolean(otherUserId) && workerUserIdSet.has(otherUserId)));
             const name = isAdm
-              ? (lang === 'hi' ? `${websiteName} एडमिन` : `${websiteName} Admin`)
+              ? adminName
               : other?.name || 'उपयोगकर्ता';
             const photo = other?.profile_photo;
             const firstLetter = name.trim().charAt(0).toUpperCase();
@@ -560,8 +555,8 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                   }`}
                 >
                   {isAdm ? (
-                    logoUrl ? (
-                      <img src={logoUrl} alt="Admin Logo" className="w-full h-full object-contain p-1" />
+                    adminPhotoUrl ? (
+                      <img src={adminPhotoUrl} alt="Admin" className="w-full h-full object-contain p-0.5" />
                     ) : (
                       <Shield className="w-6 h-6 text-amber-700" />
                     )
@@ -593,8 +588,8 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                       </div>
                       {isAdm && (
                         <span className="shrink-0 inline-flex items-center gap-1 text-[10px] font-extrabold text-amber-900 bg-amber-100 border border-amber-300 px-1.5 py-0.5 rounded-full whitespace-nowrap shadow-2xs">
-                          <Pin className="w-2.5 h-2.5 rotate-45 text-amber-700" />
-                          <span>{lang === 'hi' ? 'एडमिन (पिन)' : 'Admin (Pinned)'}</span>
+                          <Shield className="w-2.5 h-2.5 text-amber-700" />
+                          <span>{lang === 'hi' ? 'एडमिन' : 'Admin'}</span>
                         </span>
                       )}
                       {other?.is_worker_active === false && (

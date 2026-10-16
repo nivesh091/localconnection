@@ -6,6 +6,8 @@ export interface WebsiteBranding {
   name_hi: string;
   logo_url?: string | null;
   share_url?: string | null;
+  admin_name?: string | null;
+  admin_photo_url?: string | null;
 }
 
 export const DEFAULT_BRANDING: WebsiteBranding = {
@@ -13,6 +15,8 @@ export const DEFAULT_BRANDING: WebsiteBranding = {
   name_hi: 'काम मित्र',
   logo_url: null,
   share_url: null,
+  admin_name: null,
+  admin_photo_url: null,
 };
 
 const STORAGE_KEY = 'kaammitra_website_branding_v1';
@@ -36,11 +40,14 @@ class BrandingStore {
           const rawLogo = typeof parsed.logo_url === 'string' && parsed.logo_url.trim() ? parsed.logo_url.trim() : null;
           // Filter out stale placeholder logo.jpg so it doesn't linger
           const cleanLogo = rawLogo === '/logo.jpg' || rawLogo === 'logo.jpg' ? null : rawLogo;
+          const rawAdminPhoto = typeof parsed.admin_photo_url === 'string' && parsed.admin_photo_url.trim() ? parsed.admin_photo_url.trim() : null;
           return {
             name_en: parsed.name_en.trim() || DEFAULT_BRANDING.name_en,
             name_hi: parsed.name_hi.trim() || DEFAULT_BRANDING.name_hi,
             logo_url: cleanLogo,
             share_url: typeof parsed.share_url === 'string' && parsed.share_url.trim() ? parsed.share_url.trim() : null,
+            admin_name: typeof parsed.admin_name === 'string' && parsed.admin_name.trim() ? parsed.admin_name.trim() : null,
+            admin_photo_url: rawAdminPhoto,
           };
         }
       }
@@ -98,6 +105,19 @@ class BrandingStore {
       return hi;
     }
     return `${en} — ${hi}`;
+  }
+
+  getAdminName(lang: 'hi' | 'en' = 'hi'): string {
+    const custom = this.branding.admin_name?.trim();
+    if (custom) return custom;
+    const site = this.getName(lang);
+    return lang === 'hi' ? `${site} एडमिन` : `${site} Admin`;
+  }
+
+  getAdminPhotoUrl(): string | null {
+    const custom = this.branding.admin_photo_url?.trim();
+    if (custom) return custom;
+    return this.getLogoUrl();
   }
 
   subscribe(listener: () => void): () => void {
@@ -196,11 +216,17 @@ class BrandingStore {
       rawLogo = this.branding.logo_url && this.branding.logo_url !== '/logo.jpg' ? this.branding.logo_url : null;
     }
 
+    const rawAdminPhoto = newBranding.admin_photo_url !== undefined
+      ? (newBranding.admin_photo_url && newBranding.admin_photo_url.trim() ? newBranding.admin_photo_url.trim() : null)
+      : (this.branding.admin_photo_url ?? null);
+
     const updated: WebsiteBranding = {
       name_en: (newBranding.name_en !== undefined ? newBranding.name_en.trim() : this.branding.name_en) || DEFAULT_BRANDING.name_en,
       name_hi: (newBranding.name_hi !== undefined ? newBranding.name_hi.trim() : this.branding.name_hi) || DEFAULT_BRANDING.name_hi,
       logo_url: rawLogo,
       share_url: newBranding.share_url !== undefined ? (newBranding.share_url ? newBranding.share_url.trim() : null) : (this.branding.share_url ?? null),
+      admin_name: newBranding.admin_name !== undefined ? (newBranding.admin_name ? newBranding.admin_name.trim() : null) : (this.branding.admin_name ?? null),
+      admin_photo_url: rawAdminPhoto,
     };
 
     this.branding = updated;
@@ -270,6 +296,8 @@ class BrandingStore {
         let name_hi = data.home_welcome_hi;
         let logo_url: string | null = null;
         let share_url: string | null = null;
+        let admin_name: string | null = null;
+        let admin_photo_url: string | null = null;
 
         if (data.about_kaammitra_en) {
           try {
@@ -280,15 +308,19 @@ class BrandingStore {
               logo_url = parsed.logo_url && parsed.logo_url !== '/logo.jpg' && parsed.logo_url !== 'logo.jpg' ? parsed.logo_url : null;
             }
             if (parsed.share_url !== undefined) share_url = parsed.share_url;
+            if (parsed.admin_name !== undefined) admin_name = parsed.admin_name;
+            if (parsed.admin_photo_url !== undefined) admin_photo_url = parsed.admin_photo_url;
           } catch {}
         }
 
-        if (name_en || name_hi || logo_url !== null || share_url !== null) {
+        if (name_en || name_hi || logo_url !== null || share_url !== null || admin_name !== null || admin_photo_url !== null) {
           this.branding = {
             name_en: name_en?.trim() || DEFAULT_BRANDING.name_en,
             name_hi: name_hi?.trim() || DEFAULT_BRANDING.name_hi,
             logo_url: logo_url || this.branding.logo_url || null,
             share_url: share_url !== null ? share_url : (this.branding.share_url || null),
+            admin_name: admin_name !== null ? admin_name : (this.branding.admin_name || null),
+            admin_photo_url: admin_photo_url !== null ? admin_photo_url : (this.branding.admin_photo_url || null),
           };
           this.saveToStorage(this.branding);
           this.notify();

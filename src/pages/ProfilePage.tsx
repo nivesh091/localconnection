@@ -18,6 +18,7 @@ import {
   Share2,
   Check,
   Eye,
+  Code,
 } from 'lucide-react';
 import { WorkerProfile, WorkerCategory, UserLocation, PriceUnit, getPriceUnitLabel } from '../types';
 import { WorkerCard } from '../components/WorkerCard';
@@ -759,8 +760,8 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
         </button>
 
         {/* Profile Get Help Workflow */}
-        <div className="pt-8 text-left">
-          <GetHelpCard showCallHelpline={true} />
+        <div className="pt-3 text-left">
+          <GetHelpCard showCallHelpline={true} asModal={true} />
         </div>
 
         {/* Favorite Workers Section for Guest (if saved on device) */}
@@ -997,17 +998,9 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
         />
       </div>
 
-      {/* 6. HELP / सहायता — “इस प्रकार की सहायता चाहिए” — EXACTLY BELOW PRIVACY CONTROL */}
-      <div
-        className="pt-4 border-t border-slate-200/80"
-        style={{
-          backgroundColor: '#e8ffe8',
-          marginLeft: '0px',
-          marginTop: '0px',
-          borderRadius: '20px',
-        }}
-      >
-        <GetHelpCard showCallHelpline={true} />
+      {/* 6. HELP / सहायता — “हमें बताएं कि किस प्रकार की सहायता चाहिए” */}
+      <div className="pt-2">
+        <GetHelpCard showCallHelpline={true} asModal={true} />
       </div>
 
       {/* 7. WEBSITE SHARE — AT THE VERY BOTTOM OF PROFILE PAGE (Requirement 2) */}
@@ -1032,6 +1025,21 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
               </span>
             </>
           )}
+        </button>
+      </div>
+
+      {/* 8. ABOUT DEVELOPER — Directly below Share Website */}
+      <div className="pt-2">
+        <button
+          type="button"
+          onClick={() => {
+            if (onNavigateTab) onNavigateTab('developer');
+            else window.location.hash = 'developer';
+          }}
+          className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-2xl bg-white hover:bg-slate-50 border border-slate-200 hover:border-teal-300 text-slate-700 hover:text-teal-900 shadow-xs hover:shadow-sm transition-all active:scale-98 font-semibold text-xs sm:text-sm cursor-pointer group"
+        >
+          <Code className="w-4 h-4 text-teal-700 group-hover:scale-110 transition-transform shrink-0" />
+          <span>About Developer</span>
         </button>
       </div>
 

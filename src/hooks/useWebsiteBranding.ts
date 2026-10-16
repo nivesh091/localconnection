@@ -17,6 +17,8 @@ export function useWebsiteBranding() {
   const logoUrl = branding.logo_url || null;
   const shareUrl = branding.share_url || null;
   const resolvedShareUrl = brandingStore.getResolvedShareUrl();
+  const adminName = brandingStore.getAdminName(lang);
+  const adminPhotoUrl = brandingStore.getAdminPhotoUrl();
 
   const updateBranding = useCallback(
     async (newBranding: Partial<WebsiteBranding>) => {
@@ -34,7 +36,10 @@ export function useWebsiteBranding() {
     logoUrl,
     shareUrl,
     resolvedShareUrl,
+    adminName,
+    adminPhotoUrl,
     updateBranding,
     getName: (customLang?: 'hi' | 'en') => brandingStore.getName(customLang || lang),
+    getAdminName: (customLang?: 'hi' | 'en') => brandingStore.getAdminName(customLang || lang),
   };
 }

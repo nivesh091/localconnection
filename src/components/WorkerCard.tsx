@@ -10,6 +10,7 @@ import { ImageViewerModal } from './ImageViewerModal';
 import { ProfilePhotoViewerModal } from './ProfilePhotoViewerModal';
 import { WorkerQRCodeModal } from './WorkerQRCodeModal';
 import { useShortcutAudio } from '../hooks/useShortcutAudio';
+import { ADMIN_USER_ID } from '../services/chatService';
 import verificationLogo from '@/verificationlogo.png';
 
 interface WorkerCardProps {
@@ -312,7 +313,11 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                     <img
                       src={photo}
                       alt={name}
-                      className="w-full h-full object-cover"
+                      className={`w-full h-full ${
+                        worker.user_id === ADMIN_USER_ID || profile?.id === ADMIN_USER_ID
+                          ? 'object-contain p-0.5'
+                          : 'object-cover'
+                      }`}
                       loading="lazy"
                     />
                   ) : (

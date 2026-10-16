@@ -289,7 +289,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
 }) => {
   const { user, isAdmin } = useAuth();
   const { t, lang } = useTranslation();
-  const { websiteName, logoUrl } = useWebsiteBranding();
+  const { websiteName, logoUrl, adminName, adminPhotoUrl } = useWebsiteBranding();
 
   const [otherUser, setOtherUser] = useState<UserProfile | null>(() => {
     return ChatService.getCachedOtherUser(conversationId);
@@ -618,8 +618,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       if (targetId === ADMIN_USER_ID || targetId === 'admin') {
         setOtherUser({
           id: ADMIN_USER_ID,
-          name: lang === 'hi' ? `${websiteName} एडमिन` : `${websiteName} Admin`,
+          name: adminName,
           mobile: '9149275779',
+          profile_photo: adminPhotoUrl || undefined,
           created_at: new Date().toISOString(),
           updated_at: new Date().toISOString(),
           is_worker: false,
@@ -664,6 +665,21 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     }
     loadMeta();
   }, [otherUserId, conversationId, user]);
+
+  // Keep Admin profile data reactive to branding updates in conversation
+  useEffect(() => {
+    if (otherUserId === ADMIN_USER_ID || otherUser?.id === ADMIN_USER_ID || otherUser?.mobile === '9149275779') {
+      setOtherUser((prev) => ({
+        id: ADMIN_USER_ID,
+        name: adminName,
+        mobile: '9149275779',
+        profile_photo: adminPhotoUrl || undefined,
+        created_at: prev?.created_at || new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        is_worker: false,
+      }));
+    }
+  }, [adminName, adminPhotoUrl, otherUserId]);
 
   // 1b. Asynchronously hydrate from local IndexedDB cache on mount to prevent data loss
   useEffect(() => {
@@ -1284,7 +1300,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
 
   const isOtherAdmin = otherUserId === ADMIN_USER_ID || otherUser?.mobile === '9149275779';
   const name = isOtherAdmin
-    ? (lang === 'hi' ? `${websiteName} एडमिन` : `${websiteName} Admin`)
+    ? adminName
     : otherUser?.name || 'उपयोगकर्ता';
   const photo = otherUser?.profile_photo;
   const firstLetter = name.trim().charAt(0).toUpperCase();
@@ -1372,8 +1388,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                 title="प्रोफ़ाइल देखें"
               >
                 {isOtherAdmin ? (
-                  logoUrl ? (
-                    <img src={logoUrl} alt="Admin Logo" className="w-full h-full object-contain p-0.5" />
+                  adminPhotoUrl ? (
+                    <img src={adminPhotoUrl} alt="Admin" className="w-full h-full object-contain p-0.5" />
                   ) : (
                     <Shield className="w-5 h-5 text-amber-700" />
                   )

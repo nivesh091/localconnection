@@ -33,6 +33,7 @@ import {
   Crop,
   Download,
   Flag,
+  User,
 } from 'lucide-react';
 import QRCode from 'qrcode';
 import { ImageCropperModal } from '../components/ImageCropperModal';
@@ -86,7 +87,7 @@ import { DEFAULT_BRANDING } from '../services/brandingService';
 export const AdminPage: React.FC = () => {
   const { user, isAdmin, refreshUser } = useAuth();
   const { t, lang } = useTranslation();
-  const { branding, websiteName, websiteNameEn, websiteNameHi, logoUrl, updateBranding } = useWebsiteBranding();
+  const { branding, websiteName, websiteNameEn, websiteNameHi, logoUrl, adminName, adminPhotoUrl, updateBranding } = useWebsiteBranding();
 
   // Admin Login state if not authenticated as admin
   const [adminMobile, setAdminMobile] = useState('');
@@ -107,17 +108,30 @@ export const AdminPage: React.FC = () => {
   const [isSavingLogo, setIsSavingLogo] = useState(false);
   const logoInputRef = React.useRef<HTMLInputElement | null>(null);
 
+  // Admin Profile Name & Photo state
+  const [adminDisplayName, setAdminDisplayName] = useState(branding.admin_name || '');
+  const [isSavingAdminName, setIsSavingAdminName] = useState(false);
+  const adminPhotoInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [adminPhotoFileForCrop, setAdminPhotoFileForCrop] = useState<File | null>(null);
+  const [pendingAdminPhotoBlob, setPendingAdminPhotoBlob] = useState<Blob | null>(null);
+  const [pendingAdminPhotoPreview, setPendingAdminPhotoPreview] = useState<string | null>(null);
+  const [isSavingAdminPhoto, setIsSavingAdminPhoto] = useState(false);
+
   // Sync state if branding updates remotely
   useEffect(() => {
     setSiteNameEn(branding.name_en || DEFAULT_BRANDING.name_en);
     setSiteNameHi(branding.name_hi || DEFAULT_BRANDING.name_hi);
     setSiteShareUrl(branding.share_url || '');
-  }, [branding.name_en, branding.name_hi, branding.share_url]);
+    setAdminDisplayName(branding.admin_name || '');
+  }, [branding.name_en, branding.name_hi, branding.share_url, branding.admin_name]);
 
   // Locked Admin Sections (including new 'requirements' section - Point 41)
   const [activeSection, setActiveSection] = useState<
     | 'website_name'
     | 'website_logo'
+    | 'admin_name'
+    | 'admin_photo'
+    | 'admin_profile'
     | 'users'
     | 'workers'
     | 'certificate_preview'
@@ -840,6 +854,102 @@ export const AdminPage: React.FC = () => {
     }
   };
 
+  // Save Admin Display Name
+  const handleSaveAdminName = async () => {
+    setIsSavingAdminName(true);
+    try {
+      const trimmed = adminDisplayName.trim();
+      const res = await updateBranding({ admin_name: trimmed || null });
+      if (res.success) {
+        setNotice({ type: 'success', text: 'एडमिन का नाम सफलतापूर्वक अपडेट किया गया।' });
+      } else {
+        setNotice({ type: 'error', text: res.error || 'एडमिन नाम सहेजने में विफल।' });
+      }
+    } finally {
+      setIsSavingAdminName(false);
+    }
+  };
+
+  // Reset Admin Display Name to Default
+  const handleResetAdminName = async () => {
+    setIsSavingAdminName(true);
+    try {
+      const res = await updateBranding({ admin_name: null });
+      if (res.success) {
+        setAdminDisplayName('');
+        setNotice({ type: 'success', text: 'एडमिन का नाम डिफ़ॉल्ट पर रीसेट कर दिया गया।' });
+      }
+    } finally {
+      setIsSavingAdminName(false);
+    }
+  };
+
+  // Handle Admin Photo File Selection
+  const handleSelectAdminPhotoFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      setNotice({ type: 'error', text: 'फ़ोटो का साइज़ 10MB से कम होना चाहिए।' });
+      return;
+    }
+    setAdminPhotoFileForCrop(file);
+    e.target.value = '';
+  };
+
+  // Handle Admin Photo Crop Complete
+  const handleAdminPhotoCropComplete = (croppedBlob: Blob) => {
+    setPendingAdminPhotoBlob(croppedBlob);
+    const objectUrl = URL.createObjectURL(croppedBlob);
+    setPendingAdminPhotoPreview(objectUrl);
+    setAdminPhotoFileForCrop(null);
+  };
+
+  // Save Admin Profile Photo
+  const handleSaveAdminPhoto = async () => {
+    if (!pendingAdminPhotoBlob) {
+      setNotice({ type: 'error', text: 'कृपया पहले नई फ़ोटो चुनें और क्रॉप करें।' });
+      return;
+    }
+
+    setIsSavingAdminPhoto(true);
+    try {
+      const url = await uploadBrandingLogo(pendingAdminPhotoBlob);
+      const res = await updateBranding({ admin_photo_url: url });
+      if (res.success) {
+        setNotice({ type: 'success', text: 'एडमिन प्रोफ़ाइल फ़ोटो सफलतापूर्वक अपडेट की गई।' });
+        setPendingAdminPhotoBlob(null);
+        setPendingAdminPhotoPreview(null);
+      } else {
+        setNotice({ type: 'error', text: res.error || 'फ़ोटो सहेजने में विफल।' });
+      }
+    } catch (err: any) {
+      setNotice({ type: 'error', text: err?.message || 'फ़ोटो अपलोड करने में त्रुटि।' });
+    } finally {
+      setIsSavingAdminPhoto(false);
+    }
+  };
+
+  // Reset Admin Profile Photo to Default
+  const handleResetAdminPhoto = async () => {
+    if (!window.confirm('क्या आप एडमिन प्रोफ़ाइल फ़ोटो डिफ़ॉल्ट पर रीसेट करना चाहते हैं?')) {
+      return;
+    }
+
+    setIsSavingAdminPhoto(true);
+    try {
+      const res = await updateBranding({ admin_photo_url: null });
+      if (res.success) {
+        setPendingAdminPhotoBlob(null);
+        setPendingAdminPhotoPreview(null);
+        setNotice({ type: 'success', text: 'एडमिन प्रोफ़ाइल फ़ोटो डिफ़ॉल्ट पर रीसेट कर दी गई।' });
+      } else {
+        setNotice({ type: 'error', text: res.error || 'रीसेट करने में विफल।' });
+      }
+    } finally {
+      setIsSavingAdminPhoto(false);
+    }
+  };
+
   // Save Settings
   const handleSaveSettings = async () => {
     const res = await AdminService.updateSettings({
@@ -1293,6 +1403,24 @@ export const AdminPage: React.FC = () => {
           <span>वेबसाइट का लोगो बदलें (Website Logo)</span>
         </button>
         <button
+          onClick={() => setActiveSection('admin_name')}
+          className={`px-3 py-2 rounded-xl transition cursor-pointer shadow-2xs flex items-center gap-1.5 ${
+            activeSection === 'admin_name' ? 'bg-teal-800 text-white shadow-xs' : 'bg-white text-teal-900 border border-teal-300 hover:bg-teal-50'
+          }`}
+        >
+          <Shield className="w-3.5 h-3.5 text-amber-600" />
+          <span>एडमिन का नाम (Admin Name)</span>
+        </button>
+        <button
+          onClick={() => setActiveSection('admin_photo')}
+          className={`px-3 py-2 rounded-xl transition cursor-pointer shadow-2xs flex items-center gap-1.5 ${
+            activeSection === 'admin_photo' ? 'bg-teal-800 text-white shadow-xs' : 'bg-white text-teal-900 border border-teal-300 hover:bg-teal-50'
+          }`}
+        >
+          <User className="w-3.5 h-3.5 text-amber-600" />
+          <span>एडमिन प्रोफ़ाइल फ़ोटो (Admin Photo)</span>
+        </button>
+        <button
           onClick={() => setActiveSection('users')}
           className={`px-3 py-2 rounded-xl transition cursor-pointer shadow-2xs ${
             activeSection === 'users' ? 'bg-teal-800 text-white shadow-xs' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
@@ -1742,6 +1870,310 @@ export const AdminPage: React.FC = () => {
             >
               <Trash2 className="w-3.5 h-3.5 text-rose-600" />
               <span>डिफ़ॉल्ट लोगो बहाल करें (Reset Logo)</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* SECTION: ADMIN DISPLAY NAME (एडमिन का नाम बदलें) */}
+      {(activeSection === 'admin_name' || activeSection === 'admin_profile') && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5 max-w-2xl shadow-xs">
+          <div className="border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-amber-50 text-amber-800">
+                <Shield className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                  एडमिन का नाम बदलें (Admin Display Name)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  चैट लिस्ट, बातचीत (Chat) और सहायता पैनल में दिखने वाला एडमिन का नाम कस्टमाइज़ करें (जैसे: “Nivesh (Admin)” या “Hello Admin”)।
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">
+                एडमिन का नाम (Custom Admin Name)
+              </label>
+              <input
+                type="text"
+                value={adminDisplayName}
+                onChange={(e) => setAdminDisplayName(e.target.value)}
+                placeholder="उदा. Nivesh (Admin) या Hello Admin"
+                className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 focus:border-teal-600 focus:ring-1 focus:ring-teal-600 text-sm font-semibold text-slate-800 bg-white"
+              />
+              <p className="text-[11px] text-slate-400 mt-1">
+                खाली छोड़ने पर डिफ़ॉल्ट नाम (<span className="font-semibold text-slate-600">{branding.name_hi || DEFAULT_BRANDING.name_hi} एडमिन</span> / <span className="font-semibold text-slate-600">{branding.name_en || DEFAULT_BRANDING.name_en} Admin</span>) स्वतः दिखेगा।
+              </p>
+            </div>
+          </div>
+
+          {/* Live Preview Box */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+              <span>लाइव पूर्वावलोकन (Live Preview)</span>
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+              <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
+                <span className="text-slate-400 block text-[10px] font-semibold uppercase">चैट लिस्ट (Chats List):</span>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <div className="w-8 h-8 rounded-full bg-amber-100 text-amber-900 border-2 border-amber-400 flex items-center justify-center shrink-0 overflow-hidden">
+                    {adminPhotoUrl ? (
+                      <img src={adminPhotoUrl} alt="Admin" className="w-full h-full object-contain p-0.5" />
+                    ) : (
+                      <Shield className="w-4 h-4 text-amber-700" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <span className="font-bold text-slate-900 text-sm block truncate">
+                      {adminDisplayName.trim() || adminName}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block">आधिकारिक एडमिन</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
+                <span className="text-slate-400 block text-[10px] font-semibold uppercase">चैट हेडर (Chat Header):</span>
+                <div className="flex items-center gap-2 mt-1.5">
+                  <div className="w-7 h-7 rounded-full bg-amber-100 text-amber-900 border border-amber-300 flex items-center justify-center shrink-0 overflow-hidden">
+                    {adminPhotoUrl ? (
+                      <img src={adminPhotoUrl} alt="Admin" className="w-full h-full object-contain p-0.5" />
+                    ) : (
+                      <Shield className="w-3.5 h-3.5 text-amber-700" />
+                    )}
+                  </div>
+                  <span className="font-bold text-slate-900 text-sm truncate">
+                    {adminDisplayName.trim() || adminName}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleSaveAdminName}
+              disabled={isSavingAdminName}
+              className="px-6 py-2.5 bg-teal-800 hover:bg-teal-900 active:scale-98 text-white font-bold text-xs sm:text-sm rounded-xl transition cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-2"
+            >
+              {isSavingAdminName ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+              <span>नाम सहेजें (Save Admin Name)</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleResetAdminName}
+              disabled={isSavingAdminName}
+              className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl border border-slate-300 transition cursor-pointer disabled:opacity-50"
+            >
+              डिफ़ॉल्ट नाम बहाल करें (Reset to Default)
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveSection('admin_photo')}
+              className="px-4 py-2.5 bg-amber-50 hover:bg-amber-100 text-amber-900 font-semibold text-xs rounded-xl border border-amber-300 transition cursor-pointer flex items-center gap-1.5 ml-auto"
+            >
+              <User className="w-3.5 h-3.5 text-amber-700" />
+              <span>एडमिन फ़ोटो बदलें &rarr;</span>
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* SECTION: ADMIN PROFILE PHOTO (एडमिन प्रोफ़ाइल फ़ोटो बदलें) */}
+      {(activeSection === 'admin_photo' || activeSection === 'admin_profile') && (
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5 max-w-2xl shadow-xs">
+          <div className="border-b border-slate-100 pb-3">
+            <div className="flex items-center gap-2.5">
+              <div className="p-2 rounded-xl bg-amber-50 text-amber-800">
+                <User className="w-5 h-5" />
+              </div>
+              <div>
+                <h3 className="text-base sm:text-lg font-bold text-slate-900">
+                  एडमिन प्रोफ़ाइल फ़ोटो बदलें (Admin Profile Photo)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  चैट लिस्ट व बातचीत में दिखने वाली एडमिन की प्रोफ़ाइल फ़ोटो प्रबंधित करें। पूरी फ़ोटो बिना किसी अवांछित कटिंग (Crop) के साफ़ दिखेगी।
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Hidden File Input */}
+          <input
+            type="file"
+            ref={adminPhotoInputRef}
+            accept="image/*"
+            onChange={handleSelectAdminPhotoFile}
+            className="hidden"
+          />
+
+          {/* Current & New Photo Card */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* 1. Currently Active Admin Photo */}
+            <div className="p-4 rounded-xl border border-slate-200 bg-slate-50/70 flex flex-col items-center justify-center text-center space-y-3">
+              <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                वर्तमान में सक्रिय फ़ोटो (Current Photo)
+              </span>
+              <div className="w-24 h-24 rounded-full bg-amber-50 border-2 border-amber-400 flex items-center justify-center p-1 shadow-xs overflow-hidden">
+                {branding.admin_photo_url ? (
+                  <img
+                    src={branding.admin_photo_url}
+                    alt="Active Admin Profile"
+                    className="w-full h-full object-contain"
+                  />
+                ) : adminPhotoUrl ? (
+                  <img
+                    src={adminPhotoUrl}
+                    alt="Admin Photo"
+                    className="w-full h-full object-contain"
+                  />
+                ) : (
+                  <div className="w-full h-full rounded-full bg-amber-100 flex items-center justify-center">
+                    <Shield className="w-10 h-10 text-amber-700" />
+                  </div>
+                )}
+              </div>
+              <span className={`text-[11px] font-semibold px-2.5 py-0.5 rounded-full ${
+                branding.admin_photo_url ? 'bg-amber-100 text-amber-900 border border-amber-300' : 'bg-slate-200 text-slate-700'
+              }`}>
+                {branding.admin_photo_url ? 'कस्टम एडमिन फ़ोटो सक्रिय' : 'डिफ़ॉल्ट फ़ोटो / लोगो सक्रिय'}
+              </span>
+            </div>
+
+            {/* 2. New Admin Photo Upload / Preview */}
+            <div className="p-4 rounded-xl border-2 border-dashed border-amber-300 bg-amber-50/30 flex flex-col items-center justify-center text-center space-y-3">
+              <span className="text-[11px] font-bold text-amber-900 uppercase tracking-wider">
+                {pendingAdminPhotoPreview ? 'क्रॉप की गई नई फ़ोटो (New Photo)' : 'नई एडमिन फ़ोटो अपलोड करें'}
+              </span>
+
+              {pendingAdminPhotoPreview ? (
+                <div className="w-24 h-24 rounded-full bg-amber-50 border-2 border-amber-600 flex items-center justify-center p-1 shadow-sm overflow-hidden animate-in zoom-in-95">
+                  <img
+                    src={pendingAdminPhotoPreview}
+                    alt="New Admin Photo Preview"
+                    className="w-full h-full object-contain"
+                  />
+                </div>
+              ) : (
+                <div className="w-24 h-24 rounded-full bg-white border border-dashed border-amber-300 flex flex-col items-center justify-center text-slate-400 p-2">
+                  <Upload className="w-6 h-6 text-amber-600 mb-1" />
+                  <span className="text-[10px] text-slate-500 font-medium">फ़ोटो चुनें</span>
+                </div>
+              )}
+
+              <div className="flex flex-col gap-1.5 w-full">
+                <button
+                  type="button"
+                  onClick={() => adminPhotoInputRef.current?.click()}
+                  className="w-full py-2 px-3 bg-white border border-amber-500 hover:bg-amber-50 text-amber-900 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer shadow-2xs"
+                >
+                  <Crop className="w-3.5 h-3.5" />
+                  <span>{pendingAdminPhotoPreview ? 'दूसरी फ़ोटो चुनें व क्रॉप करें' : 'फ़ोटो चुनें व क्रॉप करें'}</span>
+                </button>
+                <p className="text-[10px] text-slate-500">
+                  फ़ोटो को उपयुक्त आकार में काटें। यह पूरे अवतार में object-contain के साथ बिना कटे दिखेगी।
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Live Preview across UI contexts */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+              <span>लाइव पूर्वावलोकन (Live Context Preview)</span>
+            </h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+              {/* Chats List Preview */}
+              <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-1.5">
+                <span className="text-slate-400 block text-[10px] font-semibold uppercase">1. चैट लिस्ट अवतार (Chats List Avatar):</span>
+                <div className="p-2.5 bg-[#fffcf7] rounded-xl border-2 border-amber-300 flex items-center gap-3">
+                  <div className="w-12 h-12 rounded-full overflow-hidden shrink-0 border-2 border-amber-400 bg-amber-100 flex items-center justify-center shadow-xs">
+                    {pendingAdminPhotoPreview ? (
+                      <img src={pendingAdminPhotoPreview} alt="Admin" className="w-full h-full object-contain p-0.5" />
+                    ) : adminPhotoUrl ? (
+                      <img src={adminPhotoUrl} alt="Admin" className="w-full h-full object-contain p-0.5" />
+                    ) : (
+                      <Shield className="w-6 h-6 text-amber-700" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <span className="font-bold text-slate-900 text-sm block truncate">
+                      {adminDisplayName.trim() || adminName}
+                    </span>
+                    <span className="text-xs text-slate-600 block truncate">
+                      नमस्ते! हम आपकी किस प्रकार सहायता कर सकते हैं?
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Chat Conversation Header Preview */}
+              <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs space-y-1.5">
+                <span className="text-slate-400 block text-[10px] font-semibold uppercase">2. चैट हेडर अवतार (Chat Header Avatar):</span>
+                <div className="p-2.5 bg-white rounded-xl border border-slate-200 flex items-center gap-2.5">
+                  <div className="w-9 h-9 rounded-full overflow-hidden shrink-0 border border-amber-300 bg-amber-100 flex items-center justify-center font-bold text-sm">
+                    {pendingAdminPhotoPreview ? (
+                      <img src={pendingAdminPhotoPreview} alt="Admin" className="w-full h-full object-contain p-0.5" />
+                    ) : adminPhotoUrl ? (
+                      <img src={adminPhotoUrl} alt="Admin" className="w-full h-full object-contain p-0.5" />
+                    ) : (
+                      <Shield className="w-5 h-5 text-amber-700" />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <span className="font-bold text-slate-900 text-sm block truncate">
+                      {adminDisplayName.trim() || adminName}
+                    </span>
+                    <span className="text-[10px] text-emerald-600 font-semibold block">सक्रिय (Online)</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Action buttons */}
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleSaveAdminPhoto}
+              disabled={isSavingAdminPhoto || !pendingAdminPhotoBlob}
+              className="px-6 py-2.5 bg-teal-800 hover:bg-teal-900 active:scale-98 text-white font-bold text-xs sm:text-sm rounded-xl transition cursor-pointer shadow-xs disabled:opacity-50 flex items-center gap-2"
+            >
+              {isSavingAdminPhoto ? <RefreshCw className="w-4 h-4 animate-spin" /> : <CheckCircle className="w-4 h-4" />}
+              <span>फ़ोटो सहेजें (Save Admin Photo)</span>
+            </button>
+
+            {pendingAdminPhotoPreview && (
+              <button
+                type="button"
+                onClick={() => {
+                  setPendingAdminPhotoBlob(null);
+                  setPendingAdminPhotoPreview(null);
+                }}
+                disabled={isSavingAdminPhoto}
+                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold text-xs rounded-xl border border-slate-300 transition cursor-pointer disabled:opacity-50"
+              >
+                रद्द करें (Cancel)
+              </button>
+            )}
+
+            <button
+              type="button"
+              onClick={handleResetAdminPhoto}
+              disabled={isSavingAdminPhoto}
+              className="px-4 py-2.5 bg-rose-50 hover:bg-rose-100 text-rose-800 font-semibold text-xs rounded-xl border border-rose-200 transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5 ml-auto"
+            >
+              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+              <span>डिफ़ॉल्ट फ़ोटो बहाल करें (Reset Photo)</span>
             </button>
           </div>
         </div>
@@ -3922,6 +4354,17 @@ export const AdminPage: React.FC = () => {
           title="वेबसाइट लोगो काटें (Crop Website Logo)"
           onCropComplete={handleLogoCropComplete}
           onCancel={() => setLogoFileForCrop(null)}
+        />
+      )}
+
+      {/* Admin Profile Photo Crop Modal */}
+      {adminPhotoFileForCrop && (
+        <ImageCropperModal
+          imageFile={adminPhotoFileForCrop}
+          aspectRatio={1}
+          title="एडमिन प्रोफ़ाइल फ़ोटो काटें (Crop Admin Photo)"
+          onCropComplete={handleAdminPhotoCropComplete}
+          onCancel={() => setAdminPhotoFileForCrop(null)}
         />
       )}
     </div>
