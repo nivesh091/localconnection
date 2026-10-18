@@ -11,7 +11,7 @@ self.addEventListener('push', function (event) {
     }
   }
 
-  var title = data.title || 'काम मित्र (KaamMitra)';
+  var title = data.title || data.appName || 'सूचना';
   var senderName = data.sender_name || data.senderName;
   if (!data.title && senderName) {
     title = senderName;
@@ -113,7 +113,7 @@ self.addEventListener('notificationclick', function (event) {
 
 self.addEventListener('message', function (event) {
   if (event.data && event.data.type === 'SHOW_NOTIFICATION') {
-    var title = event.data.title || 'काम मित्र (KaamMitra)';
+    var title = event.data.title || event.data.appName || 'सूचना';
     var options = event.data.options || {};
     self.registration.showNotification(title, options);
   }

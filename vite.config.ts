@@ -5,73 +5,34 @@ import { fileURLToPath } from 'url';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
 
+// @ts-ignore
+import { fetchRemoteBranding, buildManifest, generatePwaIcons } from './scripts/generate-icons.js';
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 let cachedBranding: { name: string; short_name: string } | null = null;
 let lastBrandingFetch = 0;
 
-async function getConfiguredBranding(): Promise<{ name: string; short_name: string }> {
+async function getConfiguredBranding(forceRefresh = false): Promise<{ name: string; short_name: string }> {
   const fallback = {
-    name: 'Talent',
-    short_name: 'Talent',
+    name: 'Kaam Mitra',
+    short_name: 'Kaam Mitra',
   };
 
   const now = Date.now();
-  if (cachedBranding && now - lastBrandingFetch < 60000) {
+  if (!forceRefresh && cachedBranding && now - lastBrandingFetch < 5000) {
     return cachedBranding;
   }
 
-  const supabaseUrl =
-    process.env.VITE_SUPABASE_URL || 'https://hhvxanktvbncyeedzzdf.supabase.co';
-  const supabaseKey =
-    process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-    'sb_publishable_cdXk34V8WeafviYplVRbig_fcDmRDj0';
-
-  if (!supabaseUrl || !supabaseKey) {
-    return fallback;
-  }
-
   try {
-    const res = await fetch(
-      `${supabaseUrl.replace(/\/$/, '')}/rest/v1/admin_settings?id=eq.app_branding&select=*`,
-      {
-        headers: {
-          apikey: supabaseKey,
-          Authorization: `Bearer ${supabaseKey}`,
-        },
-        signal: AbortSignal.timeout(2000),
-      }
-    );
-
-    if (res.ok) {
-      const rows = await res.json();
-      if (Array.isArray(rows) && rows[0]) {
-        const row = rows[0];
-        let nameEn = row.home_welcome_en;
-        let nameHi = row.home_welcome_hi;
-
-        if (row.about_kaammitra_en) {
-          try {
-            const parsed = JSON.parse(row.about_kaammitra_en);
-            if (parsed.name_en) nameEn = parsed.name_en;
-            if (parsed.name_hi) nameHi = parsed.name_hi;
-          } catch {}
-        }
-
-        const en = (nameEn || '').trim();
-        const hi = (nameHi || '').trim();
-
-        if (en || hi) {
-          const exactName = en || hi;
-          const result = {
-            name: exactName,
-            short_name: exactName,
-          };
-          cachedBranding = result;
-          lastBrandingFetch = now;
-          return result;
-        }
-      }
+    const remote = await fetchRemoteBranding();
+    if (remote && remote.name) {
+      cachedBranding = {
+        name: remote.name,
+        short_name: remote.short_name,
+      };
+      lastBrandingFetch = now;
+      return cachedBranding;
     }
   } catch (err) {
     console.warn('[vite.config.ts] Failed to fetch Admin branding from Supabase:', err);
@@ -83,7 +44,7 @@ async function getConfiguredBranding(): Promise<{ name: string; short_name: stri
 }
 
 export default defineConfig(async () => {
-  const branding = await getConfiguredBranding();
+  const branding = await getConfiguredBranding(true);
 
   return {
     plugins: [
@@ -91,11 +52,14 @@ export default defineConfig(async () => {
       tailwindcss(),
       {
         name: 'html-transform-branding',
-        transformIndexHtml(html: string) {
+        async transformIndexHtml(html: string) {
+          const dynamicBranding = await getConfiguredBranding();
           return html
-            .replace(/<title>.*?<\/title>/, `<title>${branding.name}</title>`)
-            .replace(/<meta property="og:title" content=".*?" \/>/, `<meta property="og:title" content="${branding.name}" />`)
-            .replace(/<meta name="apple-mobile-web-app-title" content=".*?" \/>/, `<meta name="apple-mobile-web-app-title" content="${branding.short_name}" />`);
+            .replace(/<title>.*?<\/title>/, `<title>${dynamicBranding.name}</title>`)
+            .replace(/<meta property="og:title" content=".*?" \/>/, `<meta property="og:title" content="${dynamicBranding.name}" />`)
+            .replace(/<meta name="apple-mobile-web-app-title" content=".*?" \/>/, `<meta name="apple-mobile-web-app-title" content="${dynamicBranding.short_name}" />`)
+            .replace(/<meta name="application-name" content=".*?" \/>/, `<meta name="application-name" content="${dynamicBranding.short_name}" />`)
+            .replace(/"name":\s*"[^"]*काम मित्र[^"]*"/, `"name": "${dynamicBranding.name}"`);
         },
       },
       {
@@ -107,39 +71,11 @@ export default defineConfig(async () => {
               try {
                 const currentBranding = await getConfiguredBranding();
                 const version = Date.now();
-                const manifest = {
-                  id: '/',
-                  name: currentBranding.name,
-                  short_name: currentBranding.short_name,
-                  description: 'ग्रामीण और कस्बाई क्षेत्रों के लिए काम और सेवा प्रदाताओं का विश्वसनीय मंच',
-                  theme_color: '#0f766e',
-                  background_color: '#f8fafc',
-                  display: 'standalone',
-                  start_url: '/',
-                  scope: '/',
-                  icons: [
-                    {
-                      src: `/pwa-192x192.png?v=${version}`,
-                      sizes: '192x192',
-                      type: 'image/png',
-                      purpose: 'any',
-                    },
-                    {
-                      src: `/pwa-512x512.png?v=${version}`,
-                      sizes: '512x512',
-                      type: 'image/png',
-                      purpose: 'any',
-                    },
-                    {
-                      src: `/pwa-maskable-512x512.png?v=${version}`,
-                      sizes: '512x512',
-                      type: 'image/png',
-                      purpose: 'maskable',
-                    },
-                  ],
-                };
+                const manifest = buildManifest(currentBranding, version);
                 res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
                 res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+                res.setHeader('Pragma', 'no-cache');
+                res.setHeader('Expires', '0');
                 res.end(JSON.stringify(manifest, null, 2));
                 return;
               } catch (e) {
@@ -147,7 +83,7 @@ export default defineConfig(async () => {
               }
             }
 
-            if (url === '/api/branding/sync-icons' && req.method === 'POST') {
+            if ((url === '/api/branding/sync-icons' || url === '/api/branding/sync') && req.method === 'POST') {
               let body = '';
               req.on('data', (chunk: any) => {
                 body += chunk;
@@ -155,11 +91,12 @@ export default defineConfig(async () => {
               req.on('end', async () => {
                 try {
                   const parsed = JSON.parse(body || '{}');
-                  // @ts-ignore
-                  const { generatePwaIcons } = await import('./scripts/generate-icons.js');
+                  cachedBranding = null;
+                  lastBrandingFetch = 0;
                   const result = await generatePwaIcons(parsed.logo_url);
+                  const fresh = await getConfiguredBranding(true);
                   res.setHeader('Content-Type', 'application/json');
-                  res.end(JSON.stringify({ success: true, result }));
+                  res.end(JSON.stringify({ success: true, branding: fresh, result }));
                 } catch (err: any) {
                   res.statusCode = 500;
                   res.setHeader('Content-Type', 'application/json');
@@ -202,19 +139,13 @@ export default defineConfig(async () => {
           id: '/',
           name: branding.name,
           short_name: branding.short_name,
-          description: 'ग्रामीण और कस्बाई क्षेत्रों के लिए काम और कारीगरों का विश्वसनीय मंच',
+          description: 'ग्रामीण और कस्बाई क्षेत्रों के लिए काम और सेवा प्रदाताओं का विश्वसनीय मंच',
           theme_color: '#0f766e',
           background_color: '#f8fafc',
           display: 'standalone',
           start_url: '/',
           scope: '/',
           icons: [
-            {
-              src: '/logo.jpg',
-              sizes: '1024x1024',
-              type: 'image/jpeg',
-              purpose: 'any',
-            },
             {
               src: '/pwa-192x192.png',
               sizes: '192x192',
@@ -242,7 +173,7 @@ export default defineConfig(async () => {
           clientsClaim: false,
           skipWaiting: true,
           navigateFallback: '/index.html',
-          navigateFallbackDenylist: [/^\/api\//],
+          navigateFallbackDenylist: [/^\/api\//, /\/manifest\.(webmanifest|json)$/],
           runtimeCaching: [
             // 1. Worker Profiles & Search Results from Supabase REST API (NetworkFirst with 3s fallback)
             {

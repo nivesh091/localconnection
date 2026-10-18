@@ -2,18 +2,32 @@ import fs from 'fs';
 import path from 'path';
 import sharp from 'sharp';
 import dotenv from 'dotenv';
+import { createClient } from '@supabase/supabase-js';
 
 dotenv.config();
 
 const publicDir = path.resolve(process.cwd(), 'public');
 const distDir = path.resolve(process.cwd(), 'dist');
-const defaultLogoPath = path.join(publicDir, 'logo.jpg');
+function sanitizePublishableKey(input) {
+  if (!input) return '';
+  const match = input.match(/sb_publishable_[A-Za-z0-9_-]+/);
+  if (match) return match[0];
+  if (input.startsWith('eyJ')) return input.trim();
+  return '';
+}
 
-const supabaseUrl =
-  process.env.VITE_SUPABASE_URL || 'https://hhvxanktvbncyeedzzdf.supabase.co';
-const supabaseKey =
-  process.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
-  'sb_publishable_cdXk34V8WeafviYplVRbig_fcDmRDj0';
+const DEFAULT_SUPABASE_KEY = 'sb_publishable_cdXk34V8WeafviYplVRbig_fcDmRDj0';
+const DEFAULT_SUPABASE_URL = 'https://hhvxanktvbncyeedzzdf.supabase.co';
+
+const rawUrl = process.env.VITE_SUPABASE_URL || '';
+const rawKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+
+const supabaseUrl = (rawUrl && rawUrl.startsWith('http') ? rawUrl.trim() : '') || DEFAULT_SUPABASE_URL;
+const supabaseKey = sanitizePublishableKey(rawKey) || DEFAULT_SUPABASE_KEY;
+
+const supabase = createClient(supabaseUrl, supabaseKey, {
+  auth: { persistSession: false },
+});
 
 const DEFAULT_BRAND_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
   <rect width="512" height="512" rx="104" fill="#0f766e"/>
@@ -26,7 +40,7 @@ const DEFAULT_BRAND_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 
 </svg>`;
 
 /**
- * Fetch current active branding from Supabase admin_settings
+ * Fetch current active branding dynamically from Supabase admin_settings
  */
 export async function fetchRemoteBranding() {
   const fallback = {
@@ -42,13 +56,59 @@ export async function fetchRemoteBranding() {
   }
 
   try {
+    const { data, error } = await supabase
+      .from('admin_settings')
+      .select('*')
+      .eq('id', 'app_branding')
+      .maybeSingle();
+
+    if (!error && data) {
+      let nameEn = data.home_welcome_en;
+      let nameHi = data.home_welcome_hi;
+      let logoUrl = null;
+
+      if (data.about_kaammitra_en) {
+        try {
+          const parsed = JSON.parse(data.about_kaammitra_en);
+          if (parsed.name_en) nameEn = parsed.name_en;
+          if (parsed.name_hi) nameHi = parsed.name_hi;
+          if (parsed.logo_url && parsed.logo_url !== '/logo.jpg' && parsed.logo_url !== 'logo.jpg') {
+            logoUrl = parsed.logo_url;
+          }
+        } catch {}
+      }
+
+      const en = (nameEn || '').trim();
+      const hi = (nameHi || '').trim();
+      const shortName = en || hi || fallback.short_name;
+      const combinedName =
+        en && hi && en.toLowerCase() !== hi.toLowerCase()
+          ? `${en} — ${hi}`
+          : (en || hi || fallback.name);
+
+      return {
+        name: combinedName,
+        short_name: shortName,
+        name_en: en || fallback.name_en,
+        name_hi: hi || fallback.name_hi,
+        logo_url: logoUrl ? logoUrl.trim() : null,
+      };
+    }
+  } catch (err) {
+    console.warn('[generate-icons.js] Supabase client fetch warning:', err);
+  }
+
+  // Fallback to direct HTTP fetch with accept-profile header
+  try {
     const res = await fetch(
       `${supabaseUrl.replace(/\/$/, '')}/rest/v1/admin_settings?id=eq.app_branding&select=*`,
       {
         headers: {
           apikey: supabaseKey,
           Authorization: `Bearer ${supabaseKey}`,
+          'accept-profile': 'public',
         },
+        signal: AbortSignal.timeout(3000),
       }
     );
 
@@ -73,11 +133,15 @@ export async function fetchRemoteBranding() {
 
         const en = (nameEn || '').trim();
         const hi = (nameHi || '').trim();
-        const exactName = en || hi || fallback.name;
+        const shortName = en || hi || fallback.short_name;
+        const combinedName =
+          en && hi && en.toLowerCase() !== hi.toLowerCase()
+            ? `${en} — ${hi}`
+            : (en || hi || fallback.name);
 
         return {
-          name: exactName,
-          short_name: exactName,
+          name: combinedName,
+          short_name: shortName,
           name_en: en || fallback.name_en,
           name_hi: hi || fallback.name_hi,
           logo_url: logoUrl ? logoUrl.trim() : null,

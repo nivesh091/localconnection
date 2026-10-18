@@ -149,12 +149,13 @@ app.post('/api/push/send', async (req, res) => {
 // PWA BRANDING & MANIFEST ROUTES (Admin Logo Controls Actual PWA Icon)
 // ----------------------------------------------------------------------------
 
-// 1. Sync PWA icons whenever Admin changes/uploads a logo
-app.post('/api/branding/sync-icons', async (req, res) => {
+// 1. Sync PWA icons whenever Admin changes/uploads a logo or updates branding
+app.post(['/api/branding/sync-icons', '/api/branding/sync'], async (req, res) => {
   const { logo_url } = req.body || {};
   try {
     const result = await generatePwaIcons(logo_url);
-    res.json({ success: true, result });
+    const branding = await fetchRemoteBranding();
+    res.json({ success: true, branding, result });
   } catch (err: any) {
     console.error('[PWA] Failed to generate icons:', err);
     res.status(500).json({ error: err.message || 'Failed to sync PWA icons' });
@@ -168,6 +169,8 @@ const serveDynamicManifest = async (_req: express.Request, res: express.Response
     const manifest = buildManifest(branding, Date.now());
     res.setHeader('Content-Type', 'application/manifest+json; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
+    res.setHeader('Expires', '0');
     res.json(manifest);
   } catch (err: any) {
     console.warn('[PWA] Failed to build dynamic manifest:', err);

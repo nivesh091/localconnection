@@ -233,14 +233,18 @@ class BrandingStore {
     this.saveToStorage(updated);
     this.notify();
 
-    // Sync PWA icons on server so installed PWA icon updates immediately
-    if (typeof window !== 'undefined' && newBranding.logo_url !== undefined) {
+    // Sync PWA icons & manifest on server so installed PWA metadata updates immediately
+    if (typeof window !== 'undefined') {
       fetch('/api/branding/sync-icons', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ logo_url: updated.logo_url }),
+        body: JSON.stringify({
+          logo_url: updated.logo_url,
+          name_en: updated.name_en,
+          name_hi: updated.name_hi,
+        }),
       }).catch((err) => {
-        console.warn('[BrandingStore] Sync PWA icons call note:', err);
+        console.warn('[BrandingStore] Sync PWA branding call note:', err);
       });
     }
 
