@@ -84,7 +84,8 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   const isAdminConversation = (c: Conversation) => {
     return (
       c.other_user?.id === ADMIN_USER_ID ||
-      c.other_user?.mobile === '9149275779'
+      c.user_1_id === ADMIN_USER_ID ||
+      c.user_2_id === ADMIN_USER_ID
     );
   };
 
@@ -123,7 +124,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
         const list = await ChatService.getConversations(user.id);
 
         // 2. Handle Admin conversation integration if current user is not admin
-        if (user.id !== ADMIN_USER_ID && user.mobile !== '9149275779') {
+        if (user.id !== ADMIN_USER_ID) {
           const deletedAtStr = safeStorage.getItem(`kaammitra_admin_deleted_at_${user.id}`);
           const deletedAt = deletedAtStr ? new Date(deletedAtStr) : null;
 

@@ -46,6 +46,7 @@ import { ChatImagePreviewModal } from '../components/ChatImagePreviewModal';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
+import { useCallingSettings } from '../hooks/useCallingSettings';
 import verificationLogo from '@/verificationlogo.png';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
 import { supabase } from '../lib/supabase';
@@ -323,6 +324,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
 
   // Internet Calling Integration (Requirement 5 & 12)
   const { startCall } = useCalling();
+  const { mobileCallingEnabled, internetCallingEnabled } = useCallingSettings();
+  const [callNotice, setCallNotice] = useState<string | null>(null);
   const [callHistory, setCallHistory] = useState<CallRecord[]>([]);
   const [personalRecordingsMap, setPersonalRecordingsMap] = useState<Record<string, CallRecording>>({});
   const [playingCallRecId, setPlayingCallRecId] = useState<string | null>(null);
@@ -1513,11 +1516,18 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       ? Boolean(otherUser.is_internet_call_enabled)
       : true;
 
-  // Matrix: Prioritizes Internet Calling; does not expose mobile number when Internet Calling is used
+  // Global Admin Calling Controls
+  const bothCallingDisabled = !mobileCallingEnabled && !internetCallingEnabled;
+  const canUseInternetCall = internetCallingEnabled && isOtherInternetCallEnabled;
+  const canUseMobileCall = mobileCallingEnabled && Boolean(otherUser?.mobile) && (isOtherMobilePublic || isAdmin);
+
+  // Preserve Call button in header when both methods are OFF (Requirement 4)
   const showHeaderCallButton =
-    (Boolean(otherUser?.mobile) && (isOtherMobilePublic || isAdmin)) ||
-    isOtherInternetCallEnabled;
-  const isInternetCallAction = isOtherInternetCallEnabled;
+    bothCallingDisabled ||
+    canUseInternetCall ||
+    canUseMobileCall;
+
+  const isInternetCallAction = canUseInternetCall;
 
   type TimelineItem =
     | { type: 'message'; data: Message; timestamp: number }
@@ -1553,6 +1563,13 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       }}
       className="flex flex-col h-full max-h-[100dvh] w-full max-w-2xl mx-auto bg-[#f0f2f5] border-x border-slate-200 overflow-hidden relative"
     >
+      {/* Toast Notice when calling is disabled by admin or number unavailable */}
+      {callNotice && (
+        <div className="absolute top-16 left-1/2 -translate-x-1/2 z-40 bg-slate-900/95 text-white text-xs font-bold py-2 px-4 rounded-full shadow-xl border border-slate-700 animate-in fade-in duration-150 text-center max-w-[90%] pointer-events-none">
+          {callNotice}
+        </div>
+      )}
+
       {/* 1. TOP: Chat Header - STRICTLY FIXED AT TOP */}
       <div
         style={{ backgroundColor: '#ffffff' }}
@@ -1677,17 +1694,63 @@ export const ChatPage: React.FC<ChatPageProps> = ({
               <button
                 type="button"
                 onClick={() => {
-                  if (isInternetCallAction && otherUser) {
+                  // If both calling methods are disabled by admin (Requirement 4)
+                  if (bothCallingDisabled) {
+                    setCallNotice(
+                      lang === 'hi'
+                        ? 'कॉल एडमिन द्वारा बंद की गई है'
+                        : 'Calling has been disabled by the administrator.'
+                    );
+                    setTimeout(() => setCallNotice(null), 3500);
+                    return;
+                  }
+
+                  // If Internet calling is enabled globally and other user has it enabled
+                  if (canUseInternetCall && otherUser) {
                     startCall(otherUser, conversationId);
                     return;
                   }
-                  if (otherUser?.mobile) {
+
+                  // If Mobile calling is enabled globally and user's mobile is available/public
+                  if (canUseMobileCall && otherUser?.mobile) {
                     window.location.href = `tel:${otherUser.mobile}`;
+                    return;
                   }
+
+                  // If mobile is allowed globally but user's number is private or not available
+                  if (mobileCallingEnabled && !canUseMobileCall) {
+                    setCallNotice(
+                      lang === 'hi'
+                        ? 'मोबाइल नंबर उपलब्ध नहीं है'
+                        : 'Mobile number is private or unavailable'
+                    );
+                    setTimeout(() => setCallNotice(null), 3500);
+                    return;
+                  }
+
+                  // If internet calling is allowed globally but recipient has disabled it
+                  if (internetCallingEnabled && !canUseInternetCall) {
+                    setCallNotice(
+                      lang === 'hi'
+                        ? 'उपयोगकर्ता ने इंटरनेट कॉलिंग बंद कर रखी है'
+                        : 'User has disabled internet calling'
+                    );
+                    setTimeout(() => setCallNotice(null), 3500);
+                    return;
+                  }
+
+                  setCallNotice(
+                    lang === 'hi'
+                      ? 'कॉल एडमिन द्वारा बंद की गई है'
+                      : 'Calling has been disabled by the administrator.'
+                  );
+                  setTimeout(() => setCallNotice(null), 3500);
                 }}
                 className="p-2 text-teal-700 hover:bg-teal-50 rounded-full transition shrink-0 cursor-pointer"
                 title={
-                  isInternetCallAction
+                  bothCallingDisabled
+                    ? (lang === 'hi' ? 'कॉल बंद है' : 'Calling disabled')
+                    : isInternetCallAction
                     ? (lang === 'hi' ? 'इंटरनेट कॉल करें' : 'Internet Call')
                     : (lang === 'hi' ? 'कॉल करें' : 'Call')
                 }

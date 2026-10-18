@@ -1,16 +1,21 @@
 /**
  * Ringtone & Audio Tone Synthesizer using Web Audio API
  * Generates reliable incoming & outgoing call tones without external MP3 asset dependency.
+ * Enforces strict lifecycle cleanup to prevent lingering playback in background.
  */
 
 class RingtoneService {
   private audioCtx: AudioContext | null = null;
-  private ringOscillator1: OscillatorNode | null = null;
-  private ringOscillator2: OscillatorNode | null = null;
-  private ringGainNode: GainNode | null = null;
   private ringIntervalId: any = null;
+  private dialIntervalId: any = null;
   private isRinging: boolean = false;
   private isDialing: boolean = false;
+
+  // Active oscillator and gain tracking for instant, unconditional termination
+  private activeIncomingOscillators: Set<OscillatorNode> = new Set();
+  private activeOutgoingOscillators: Set<OscillatorNode> = new Set();
+  private incomingMasterGain: GainNode | null = null;
+  private outgoingMasterGain: GainNode | null = null;
 
   private getAudioContext(): AudioContext {
     if (!this.audioCtx || this.audioCtx.state === 'closed') {
@@ -29,8 +34,11 @@ class RingtoneService {
    * Uses dual frequency (440Hz + 480Hz) cadence with vibration support
    */
   public startIncomingRingtone(): void {
+    // If already ringing, don't duplicate
     if (this.isRinging) return;
-    this.stopAll();
+
+    // Clean up any lingering tones first
+    this.stopIncomingRingtone();
 
     this.isRinging = true;
 
@@ -47,9 +55,15 @@ class RingtoneService {
         const ctx = this.getAudioContext();
         const now = ctx.currentTime;
 
+        // Master gain for incoming ringtone to allow instantaneous muting
+        const masterGain = ctx.createGain();
+        masterGain.gain.setValueAtTime(1.0, now);
+        masterGain.connect(ctx.destination);
+        this.incomingMasterGain = masterGain;
+
         const osc1 = ctx.createOscillator();
         const osc2 = ctx.createOscillator();
-        const gain = ctx.createGain();
+        const burstGain = ctx.createGain();
 
         osc1.type = 'sine';
         osc1.frequency.setValueAtTime(440, now); // A4
@@ -57,20 +71,31 @@ class RingtoneService {
         osc2.frequency.setValueAtTime(480, now); // Harmonic ring
 
         // Burst 1: 0.8s
-        gain.gain.setValueAtTime(0, now);
-        gain.gain.linearRampToValueAtTime(0.25, now + 0.05);
-        gain.gain.setValueAtTime(0.25, now + 0.8);
-        gain.gain.linearRampToValueAtTime(0, now + 0.85);
+        burstGain.gain.setValueAtTime(0, now);
+        burstGain.gain.linearRampToValueAtTime(0.25, now + 0.05);
+        burstGain.gain.setValueAtTime(0.25, now + 0.8);
+        burstGain.gain.linearRampToValueAtTime(0, now + 0.85);
 
         // Burst 2: 0.8s after 0.2s pause
-        gain.gain.setValueAtTime(0, now + 1.05);
-        gain.gain.linearRampToValueAtTime(0.25, now + 1.1);
-        gain.gain.setValueAtTime(0.25, now + 1.9);
-        gain.gain.linearRampToValueAtTime(0, now + 1.95);
+        burstGain.gain.setValueAtTime(0, now + 1.05);
+        burstGain.gain.linearRampToValueAtTime(0.25, now + 1.1);
+        burstGain.gain.setValueAtTime(0.25, now + 1.9);
+        burstGain.gain.linearRampToValueAtTime(0, now + 1.95);
 
-        osc1.connect(gain);
-        osc2.connect(gain);
-        gain.connect(ctx.destination);
+        osc1.connect(burstGain);
+        osc2.connect(burstGain);
+        burstGain.connect(masterGain);
+
+        this.activeIncomingOscillators.add(osc1);
+        this.activeIncomingOscillators.add(osc2);
+
+        const cleanupOscillators = () => {
+          this.activeIncomingOscillators.delete(osc1);
+          this.activeIncomingOscillators.delete(osc2);
+        };
+
+        osc1.onended = cleanupOscillators;
+        osc2.onended = cleanupOscillators;
 
         osc1.start(now);
         osc2.start(now);
@@ -92,13 +117,53 @@ class RingtoneService {
   }
 
   /**
+   * Stop incoming ringtone immediately and unconditionally
+   */
+  public stopIncomingRingtone(): void {
+    this.isRinging = false;
+
+    if (this.ringIntervalId) {
+      clearInterval(this.ringIntervalId);
+      this.ringIntervalId = null;
+    }
+
+    // Immediately silence incoming master gain
+    try {
+      if (this.incomingMasterGain) {
+        if (this.audioCtx && this.audioCtx.state !== 'closed') {
+          this.incomingMasterGain.gain.cancelScheduledValues(this.audioCtx.currentTime);
+          this.incomingMasterGain.gain.setValueAtTime(0, this.audioCtx.currentTime);
+        }
+        this.incomingMasterGain.disconnect();
+        this.incomingMasterGain = null;
+      }
+    } catch {}
+
+    // Immediately stop and disconnect all active incoming oscillators
+    this.activeIncomingOscillators.forEach((osc) => {
+      try {
+        osc.stop();
+        osc.disconnect();
+      } catch {}
+    });
+    this.activeIncomingOscillators.clear();
+
+    // Cancel vibration
+    try {
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate(0);
+      }
+    } catch {}
+  }
+
+  /**
    * Start Outgoing Ringback Dial Tone
    * 400Hz + 450Hz, 1s on, 2s off
    */
   public startOutgoingTone(): void {
     if (this.isDialing) return;
-    this.stopAll();
 
+    this.stopOutgoingTone();
     this.isDialing = true;
 
     const playDialBurst = () => {
@@ -107,23 +172,39 @@ class RingtoneService {
         const ctx = this.getAudioContext();
         const now = ctx.currentTime;
 
+        const masterGain = ctx.createGain();
+        masterGain.gain.setValueAtTime(1.0, now);
+        masterGain.connect(ctx.destination);
+        this.outgoingMasterGain = masterGain;
+
         const osc1 = ctx.createOscillator();
         const osc2 = ctx.createOscillator();
-        const gain = ctx.createGain();
+        const burstGain = ctx.createGain();
 
         osc1.type = 'sine';
         osc1.frequency.setValueAtTime(400, now);
         osc2.type = 'sine';
         osc2.frequency.setValueAtTime(450, now);
 
-        gain.gain.setValueAtTime(0, now);
-        gain.gain.linearRampToValueAtTime(0.12, now + 0.05);
-        gain.gain.setValueAtTime(0.12, now + 1.0);
-        gain.gain.linearRampToValueAtTime(0, now + 1.05);
+        burstGain.gain.setValueAtTime(0, now);
+        burstGain.gain.linearRampToValueAtTime(0.12, now + 0.05);
+        burstGain.gain.setValueAtTime(0.12, now + 1.0);
+        burstGain.gain.linearRampToValueAtTime(0, now + 1.05);
 
-        osc1.connect(gain);
-        osc2.connect(gain);
-        gain.connect(ctx.destination);
+        osc1.connect(burstGain);
+        osc2.connect(burstGain);
+        burstGain.connect(masterGain);
+
+        this.activeOutgoingOscillators.add(osc1);
+        this.activeOutgoingOscillators.add(osc2);
+
+        const cleanupOscillators = () => {
+          this.activeOutgoingOscillators.delete(osc1);
+          this.activeOutgoingOscillators.delete(osc2);
+        };
+
+        osc1.onended = cleanupOscillators;
+        osc2.onended = cleanupOscillators;
 
         osc1.start(now);
         osc2.start(now);
@@ -135,7 +216,38 @@ class RingtoneService {
     };
 
     playDialBurst();
-    this.ringIntervalId = setInterval(playDialBurst, 3000);
+    this.dialIntervalId = setInterval(playDialBurst, 3000);
+  }
+
+  /**
+   * Stop outgoing dial tone immediately
+   */
+  public stopOutgoingTone(): void {
+    this.isDialing = false;
+
+    if (this.dialIntervalId) {
+      clearInterval(this.dialIntervalId);
+      this.dialIntervalId = null;
+    }
+
+    try {
+      if (this.outgoingMasterGain) {
+        if (this.audioCtx && this.audioCtx.state !== 'closed') {
+          this.outgoingMasterGain.gain.cancelScheduledValues(this.audioCtx.currentTime);
+          this.outgoingMasterGain.gain.setValueAtTime(0, this.audioCtx.currentTime);
+        }
+        this.outgoingMasterGain.disconnect();
+        this.outgoingMasterGain = null;
+      }
+    } catch {}
+
+    this.activeOutgoingOscillators.forEach((osc) => {
+      try {
+        osc.stop();
+        osc.disconnect();
+      } catch {}
+    });
+    this.activeOutgoingOscillators.clear();
   }
 
   /**
@@ -179,36 +291,16 @@ class RingtoneService {
    * Stop all ringing, dial tones, and vibration
    */
   public stopAll(): void {
-    this.isRinging = false;
-    this.isDialing = false;
+    this.stopIncomingRingtone();
+    this.stopOutgoingTone();
+  }
 
-    if (this.ringIntervalId) {
-      clearInterval(this.ringIntervalId);
-      this.ringIntervalId = null;
-    }
+  public isIncomingRinging(): boolean {
+    return this.isRinging;
+  }
 
-    try {
-      if (this.ringOscillator1) {
-        this.ringOscillator1.stop();
-        this.ringOscillator1.disconnect();
-        this.ringOscillator1 = null;
-      }
-      if (this.ringOscillator2) {
-        this.ringOscillator2.stop();
-        this.ringOscillator2.disconnect();
-        this.ringOscillator2 = null;
-      }
-      if (this.ringGainNode) {
-        this.ringGainNode.disconnect();
-        this.ringGainNode = null;
-      }
-    } catch {}
-
-    try {
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate(0);
-      }
-    } catch {}
+  public isOutgoingDialing(): boolean {
+    return this.isDialing;
   }
 }
 

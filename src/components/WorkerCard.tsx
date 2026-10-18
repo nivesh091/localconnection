@@ -12,6 +12,7 @@ import { WorkerQRCodeModal } from './WorkerQRCodeModal';
 import { useShortcutAudio } from '../hooks/useShortcutAudio';
 import { ADMIN_USER_ID } from '../services/chatService';
 import { useCalling } from '../context/CallingContext';
+import { useCallingSettings } from '../hooks/useCallingSettings';
 import verificationLogo from '@/verificationlogo.png';
 
 interface WorkerCardProps {
@@ -50,6 +51,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
   const hasAudio = Boolean(showAudioShortcut && audioUrl);
   const { isPlaying, isLoading, hasError, toggleAudio, preloadAudio } = useShortcutAudio(worker.user_id);
   const { startCall } = useCalling();
+  const { mobileCallingEnabled, internetCallingEnabled } = useCallingSettings();
 
   // 1. Worker Name from real profile data
   const profile = worker.profile;
@@ -78,13 +80,18 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
   const canViewMobile = isMobilePublic || isAdmin;
   const mobile = canViewMobile ? (profile?.mobile?.trim() || '') : '';
 
-  // Matrix:
-  // Mobile OFF + Internet OFF -> show no call button
-  // Mobile ON + Internet OFF -> mobile tel: call
-  // Mobile OFF + Internet ON -> Internet Calling only; do not expose mobile
-  // Both ON -> prioritize Internet Calling; do not expose mobile
-  const showCallButton = Boolean(isMobilePublic && mobile) || isInternetCallEnabled;
-  const isInternetCallAction = isInternetCallEnabled;
+  // Global Admin Calling Controls:
+  const bothCallingDisabled = !mobileCallingEnabled && !internetCallingEnabled;
+  const canUseInternetCall = internetCallingEnabled && isInternetCallEnabled;
+  const canUseMobileCall = mobileCallingEnabled && Boolean(isMobilePublic && mobile);
+
+  // Preserve Call button when both methods are OFF (Requirement 4)
+  const showCallButton =
+    bothCallingDisabled ||
+    canUseInternetCall ||
+    canUseMobileCall;
+
+  const isInternetCallAction = canUseInternetCall;
 
   // 2. True dynamic auto-fit font sizing calculation based on worker name length:
   // Short name -> noticeably larger, medium -> medium, long -> smaller, very long -> smaller + natural wrap
@@ -283,23 +290,55 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
       return;
     }
 
-    // Prioritize Internet Calling if enabled
-    if (isInternetCallAction && profile) {
+    // Both methods OFF: Show clear message without initiating call (Requirement 4)
+    if (bothCallingDisabled) {
+      setCallNotice(
+        lang === 'hi'
+          ? 'कॉल एडमिन द्वारा बंद की गई है'
+          : 'Calling has been disabled by the administrator.'
+      );
+      setTimeout(() => setCallNotice(null), 3500);
+      return;
+    }
+
+    // Prioritize Internet Calling if allowed globally and by worker
+    if (canUseInternetCall && profile) {
       startCall(profile);
       return;
     }
 
-    // Otherwise use tel: if mobile is public & available
-    if (mobile) {
+    // Otherwise use tel: if mobile calling is allowed globally and number is available
+    if (canUseMobileCall && mobile) {
       window.location.href = `tel:${mobile}`;
-    } else {
+      return;
+    }
+
+    if (mobileCallingEnabled && !canUseMobileCall) {
       setCallNotice(
         lang === 'hi'
           ? 'नंबर उपलब्ध नहीं है'
           : 'Number not available'
       );
       setTimeout(() => setCallNotice(null), 3500);
+      return;
     }
+
+    if (internetCallingEnabled && !canUseInternetCall) {
+      setCallNotice(
+        lang === 'hi'
+          ? 'उपयोगकर्ता ने इंटरनेट कॉलिंग बंद कर रखी है'
+          : 'User has disabled internet calling'
+      );
+      setTimeout(() => setCallNotice(null), 3500);
+      return;
+    }
+
+    setCallNotice(
+      lang === 'hi'
+        ? 'कॉल एडमिन द्वारा बंद की गई है'
+        : 'Calling has been disabled by the administrator.'
+    );
+    setTimeout(() => setCallNotice(null), 3500);
   };
 
   return (

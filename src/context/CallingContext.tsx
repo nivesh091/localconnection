@@ -27,6 +27,7 @@ import {
 import { useAuth } from './AuthContext';
 import { supabase } from '../lib/supabase';
 import { CallingService } from '../services/callingService';
+import { AdminService } from '../services/adminService';
 import { ChatService } from '../services/chatService';
 import { ringtoneService } from '../services/ringtoneService';
 import { CallAudioRecorder } from '../services/callAudioRecorder';
@@ -75,6 +76,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [callDuration, setCallDuration] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [showConnectingRefreshToast, setShowConnectingRefreshToast] = useState(false);
+  const [adminTerminationNotice, setAdminTerminationNotice] = useState<string | null>(null);
 
   // Guidelines modal
   const [showGuidelines, setShowGuidelines] = useState(false);
@@ -102,6 +104,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const hasRemoteDescriptionRef = useRef<boolean>(false);
   const isConnectedRef = useRef<boolean>(false);
   const terminatingCallIdRef = useRef<string | null>(null);
+  const handledCallIdsRef = useRef<Set<string>>(new Set());
+  const terminatedCallIdsRef = useRef<Set<string>>(new Set());
 
   // Timers & Channels
   const durationTimerRef = useRef<any>(null);
@@ -117,14 +121,53 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     Boolean(window.RTCPeerConnection) &&
     Boolean(navigator.mediaDevices?.getUserMedia);
 
+  // Stop ringtones immediately on unmount or when callState changes away from ringing/calling
+  useEffect(() => {
+    if (callState !== 'ringing') {
+      ringtoneService.stopIncomingRingtone();
+    }
+    if (callState !== 'calling') {
+      ringtoneService.stopOutgoingTone();
+    }
+    if (callState === 'idle' || callState === 'ended') {
+      ringtoneService.stopAll();
+    }
+  }, [callState]);
+
+  useEffect(() => {
+    return () => {
+      ringtoneService.stopAll();
+    };
+  }, []);
+
   // 1. Stable, Persistent Listener for Incoming Calls (Created once per authenticated user)
   useEffect(() => {
     if (!user?.id) return;
 
     console.log('[WebRTC-Call] Initializing persistent incoming call listener for user:', user.id);
 
-    const unsubscribe = CallingService.subscribeToIncomingCalls(user.id, (incomingCall) => {
+    const unsubscribe = CallingService.subscribeToIncomingCalls(user.id, async (incomingCall) => {
       console.log('[WebRTC-Call] Incoming call event received:', incomingCall.id, 'from:', incomingCall.caller_id);
+
+      // Check if call was already handled, answered, or terminated (prevent duplicate broadcast/postgres_changes replay)
+      if (
+        handledCallIdsRef.current.has(incomingCall.id) ||
+        terminatedCallIdsRef.current.has(incomingCall.id)
+      ) {
+        console.log('[WebRTC-Call] Duplicate or terminated incoming call event ignored:', incomingCall.id);
+        return;
+      }
+
+      // Check if Admin has disabled Internet Calling globally (fail-safe)
+      const callingSettings = await AdminService.getCallingSettings().catch(() => ({
+        mobile_calling_enabled: false,
+        internet_calling_enabled: false,
+      }));
+      if (!callingSettings.internet_calling_enabled) {
+        console.warn('[WebRTC-Call] Rejecting incoming call because internet calling is disabled by admin:', incomingCall.id);
+        CallingService.rejectCall(incomingCall.id);
+        return;
+      }
 
       // If already in an active call, ignore or decline duplicate
       if (
@@ -139,6 +182,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         return;
       }
 
+      handledCallIdsRef.current.add(incomingCall.id);
       setActiveCall(incomingCall);
       setOtherParticipant(incomingCall.caller || null);
       setCallState('ringing');
@@ -155,9 +199,34 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     });
 
     return () => {
+      ringtoneService.stopAll();
       unsubscribe();
     };
   }, [user?.id]);
+
+  // Real-time listener for Admin Calling Controls:
+  // If Admin turns off internet calling during an active call, safely terminate for both participants
+  useEffect(() => {
+    const unsubscribe = AdminService.subscribeToCallingSettings(async (settings) => {
+      if (!settings.internet_calling_enabled) {
+        if (
+          activeCallRef.current &&
+          callStateRef.current !== 'idle' &&
+          callStateRef.current !== 'ended'
+        ) {
+          console.warn('[WebRTC-Call] Admin disabled internet calling during active call. Disconnecting safely.');
+          await endCall();
+          setAdminTerminationNotice(
+            'इंटरनेट कॉलिंग एडमिन द्वारा बंद कर दी गई है। कॉल समाप्त हो गई है।\n(Internet calling has been disabled by the administrator. Call has been terminated.)'
+          );
+        }
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, []);
 
   // 2. 10-second timer to suggest refresh if call remains in 'connecting' state without connecting
   useEffect(() => {
@@ -186,6 +255,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   // Handle unanswered timeout
   const handleTimeout = async (callId: string) => {
+    handledCallIdsRef.current.add(callId);
+    terminatedCallIdsRef.current.add(callId);
     if (terminatingCallIdRef.current === callId) return;
     terminatingCallIdRef.current = callId;
     ringtoneService.stopAll();
@@ -291,6 +362,60 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       }
     }
   }, []);
+
+  // Safe wrapper for setting remote offer with strict signalingState checking
+  const safeSetRemoteOffer = useCallback(
+    async (
+      pc: RTCPeerConnection,
+      offerSdp: RTCSessionDescriptionInit,
+      source: string
+    ): Promise<boolean> => {
+      if (!pc) return false;
+      if (pc.signalingState !== 'stable') {
+        console.log(
+          `[WebRTC-Call] Skipping offer from ${source}: signalingState is '${pc.signalingState}' (expected 'stable')`
+        );
+        return false;
+      }
+      try {
+        console.log(`[WebRTC-Call] Setting remote offer SDP from ${source}`);
+        await pc.setRemoteDescription(new RTCSessionDescription(offerSdp));
+        hasRemoteDescriptionRef.current = true;
+        return true;
+      } catch (err: any) {
+        console.warn(`[WebRTC-Call] setRemoteDescription offer error from ${source}:`, err?.message || err);
+        return false;
+      }
+    },
+    []
+  );
+
+  // Safe wrapper for setting remote answer with strict signalingState checking
+  const safeSetRemoteAnswer = useCallback(
+    async (
+      pc: RTCPeerConnection,
+      answerSdp: RTCSessionDescriptionInit,
+      source: string
+    ): Promise<boolean> => {
+      if (!pc) return false;
+      if (pc.signalingState !== 'have-local-offer') {
+        console.log(
+          `[WebRTC-Call] Skipping answer from ${source}: signalingState is '${pc.signalingState}' (expected 'have-local-offer')`
+        );
+        return false;
+      }
+      try {
+        console.log(`[WebRTC-Call] Setting remote answer SDP from ${source}`);
+        await pc.setRemoteDescription(new RTCSessionDescription(answerSdp));
+        hasRemoteDescriptionRef.current = true;
+        return true;
+      } catch (err: any) {
+        console.warn(`[WebRTC-Call] setRemoteDescription answer error from ${source}:`, err?.message || err);
+        return false;
+      }
+    },
+    []
+  );
 
   // Trigger when connection is established
   const handleConnectionEstablished = useCallback(() => {
@@ -599,6 +724,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   // Peer-initiated hangup (Idempotent local teardown without triggering recursive signal loop)
   const handlePeerHangup = useCallback(
     async (callId: string) => {
+      handledCallIdsRef.current.add(callId);
+      terminatedCallIdsRef.current.add(callId);
       if (terminatingCallIdRef.current === callId) {
         console.log('[WebRTC-Call] Call already terminating for:', callId, 'skipping duplicate peer hangup');
         return;
@@ -652,45 +779,40 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           try {
             if (signal.type === 'offer') {
               // Receiver receives offer
-              console.log('[WebRTC-Call] Setting remote description with received offer');
-              await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-              hasRemoteDescriptionRef.current = true;
-              await drainQueuedCandidates(pc);
+              const applied = await safeSetRemoteOffer(pc, signal.payload, 'broadcast_offer');
+              if (applied) {
+                await drainQueuedCandidates(pc);
 
-              // Also fetch any candidates caller already stored in DB
-              const dbCandidates = await CallingService.getIceCandidates(callId, peerUserId);
-              for (const cand of dbCandidates) {
-                const candKey = typeof cand === 'string' ? cand : JSON.stringify(cand);
-                if (addedCandidatesRef.current.has(candKey)) continue;
-                addedCandidatesRef.current.add(candKey);
-                try {
-                  await pc.addIceCandidate(new RTCIceCandidate(cand));
-                } catch {}
+                // Also fetch any candidates caller already stored in DB
+                const dbCandidates = await CallingService.getIceCandidates(callId, peerUserId);
+                for (const cand of dbCandidates) {
+                  const candKey = typeof cand === 'string' ? cand : JSON.stringify(cand);
+                  if (addedCandidatesRef.current.has(candKey)) continue;
+                  addedCandidatesRef.current.add(candKey);
+                  try {
+                    await pc.addIceCandidate(new RTCIceCandidate(cand));
+                  } catch {}
+                }
+
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                console.log('[WebRTC-Call] Created answer, sending back to caller');
+
+                CallingService.sendSignal(
+                  {
+                    call_id: callId,
+                    sender_id: user!.id,
+                    recipient_id: peerUserId,
+                    type: 'answer',
+                    payload: answer,
+                  },
+                  channel
+                );
               }
-
-              const answer = await pc.createAnswer();
-              await pc.setLocalDescription(answer);
-              console.log('[WebRTC-Call] Created answer, sending back to caller');
-
-              CallingService.sendSignal(
-                {
-                  call_id: callId,
-                  sender_id: user!.id,
-                  recipient_id: peerUserId,
-                  type: 'answer',
-                  payload: answer,
-                },
-                channel
-              );
             } else if (signal.type === 'answer') {
               // Caller receives answer
-              console.log('[WebRTC-Call] Caller received answer signal');
-              if (
-                pc.signalingState === 'have-local-offer' ||
-                !pc.remoteDescription
-              ) {
-                await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
-                hasRemoteDescriptionRef.current = true;
+              const applied = await safeSetRemoteAnswer(pc, signal.payload, 'broadcast_answer');
+              if (applied) {
                 await drainQueuedCandidates(pc);
 
                 const rxCandidates = await CallingService.getIceCandidates(callId, peerUserId);
@@ -744,41 +866,34 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
               const dbOffer = await CallingService.getOfferSignal(callId);
               if (dbOffer && peerConnectionRef.current) {
                 const pc = peerConnectionRef.current;
-                if (!pc.remoteDescription) {
-                  try {
-                    console.log('[WebRTC-Call] Applying Offer retrieved from DB fallback');
-                    await pc.setRemoteDescription(new RTCSessionDescription(dbOffer));
-                    hasRemoteDescriptionRef.current = true;
-                    
-                    // Also fetch caller's existing ICE candidates from DB
-                    const existingCandidates = await CallingService.getIceCandidates(callId, peerUserId);
-                    console.log('[WebRTC-Call] Fetched caller ICE candidates from DB, count:', existingCandidates.length);
-                    for (const cand of existingCandidates) {
-                      const candKey = typeof cand === 'string' ? cand : JSON.stringify(cand);
-                      if (addedCandidatesRef.current.has(candKey)) continue;
-                      addedCandidatesRef.current.add(candKey);
-                      try {
-                        await pc.addIceCandidate(new RTCIceCandidate(cand));
-                      } catch {}
-                    }
-
-                    await drainQueuedCandidates(pc);
-                    const answer = await pc.createAnswer();
-                    await pc.setLocalDescription(answer);
-
-                    CallingService.sendSignal(
-                      {
-                        call_id: callId,
-                        sender_id: user!.id,
-                        recipient_id: peerUserId,
-                        type: 'answer',
-                        payload: answer,
-                      },
-                      channel
-                    );
-                  } catch (e) {
-                    console.warn('[WebRTC-Call] Fallback offer processing error:', e);
+                const applied = await safeSetRemoteOffer(pc, dbOffer, 'db_fallback_offer');
+                if (applied) {
+                  // Also fetch caller's existing ICE candidates from DB
+                  const existingCandidates = await CallingService.getIceCandidates(callId, peerUserId);
+                  console.log('[WebRTC-Call] Fetched caller ICE candidates from DB, count:', existingCandidates.length);
+                  for (const cand of existingCandidates) {
+                    const candKey = typeof cand === 'string' ? cand : JSON.stringify(cand);
+                    if (addedCandidatesRef.current.has(candKey)) continue;
+                    addedCandidatesRef.current.add(candKey);
+                    try {
+                      await pc.addIceCandidate(new RTCIceCandidate(cand));
+                    } catch {}
                   }
+
+                  await drainQueuedCandidates(pc);
+                  const answer = await pc.createAnswer();
+                  await pc.setLocalDescription(answer);
+
+                  CallingService.sendSignal(
+                    {
+                      call_id: callId,
+                      sender_id: user!.id,
+                      recipient_id: peerUserId,
+                      type: 'answer',
+                      payload: answer,
+                    },
+                    channel
+                  );
                 }
               }
             }
@@ -814,24 +929,27 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                 // If caller sees call is connecting/connected on server, check for Answer in DB
                 if (isInitiatorRef.current && peerConnectionRef.current) {
                   const pc = peerConnectionRef.current;
-                  if (!pc.remoteDescription) {
+                  if (pc.signalingState === 'have-local-offer') {
                     const dbAnswer = await CallingService.getAnswerSignal(callId);
-                    if (dbAnswer) {
-                      console.log('[WebRTC-Call] Applying Answer retrieved from DB on status update');
-                      await pc.setRemoteDescription(new RTCSessionDescription(dbAnswer));
-                      hasRemoteDescriptionRef.current = true;
-                      
-                      // Fetch receiver's ICE candidates
-                      const rxCandidates = await CallingService.getIceCandidates(callId, peerUserId);
-                      for (const c of rxCandidates) {
-                        const candKey = typeof c === 'string' ? c : JSON.stringify(c);
-                        if (addedCandidatesRef.current.has(candKey)) continue;
-                        addedCandidatesRef.current.add(candKey);
-                        try {
-                          await pc.addIceCandidate(new RTCIceCandidate(c));
-                        } catch {}
+                    if (dbAnswer && peerConnectionRef.current) {
+                      const applied = await safeSetRemoteAnswer(
+                        peerConnectionRef.current,
+                        dbAnswer,
+                        'db_status_update_answer'
+                      );
+                      if (applied) {
+                        // Fetch receiver's ICE candidates
+                        const rxCandidates = await CallingService.getIceCandidates(callId, peerUserId);
+                        for (const c of rxCandidates) {
+                          const candKey = typeof c === 'string' ? c : JSON.stringify(c);
+                          if (addedCandidatesRef.current.has(candKey)) continue;
+                          addedCandidatesRef.current.add(candKey);
+                          try {
+                            await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(c));
+                          } catch {}
+                        }
+                        await drainQueuedCandidates(peerConnectionRef.current);
                       }
-                      await drainQueuedCandidates(pc);
                     }
                   }
                 }
@@ -864,8 +982,23 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   // START OUTGOING CALL
   const startCall = async (targetUser: UserProfile, conversationId?: string): Promise<boolean> => {
     if (!user) return false;
+
+    // Check if Admin has disabled Internet Calling globally (fail-safe)
+    const callingSettings = await AdminService.getCallingSettings().catch(() => ({
+      mobile_calling_enabled: false,
+      internet_calling_enabled: false,
+    }));
+    if (!callingSettings.internet_calling_enabled) {
+      setAdminTerminationNotice(
+        'कॉल एडमिन द्वारा बंद की गई है\n(Calling has been disabled by the administrator.)'
+      );
+      return false;
+    }
+
     if (!isCallSupported) {
-      alert('आपका ब्राउज़र इंटरनेट कॉलिंग का समर्थन नहीं करता है।');
+      setAdminTerminationNotice(
+        'आपका ब्राउज़र इंटरनेट कॉलिंग का समर्थन नहीं करता है।\n(Your browser does not support internet calling.)'
+      );
       return false;
     }
 
@@ -972,17 +1105,23 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       // 6. Polling fallback for Answer (in case broadcast dropped)
       if (answerPollTimerRef.current) clearInterval(answerPollTimerRef.current);
       answerPollTimerRef.current = setInterval(async () => {
-        if (!peerConnectionRef.current || hasRemoteDescriptionRef.current) {
-          if (answerPollTimerRef.current) clearInterval(answerPollTimerRef.current);
+        const pc = peerConnectionRef.current;
+        if (!pc || hasRemoteDescriptionRef.current || pc.signalingState !== 'have-local-offer') {
+          if (answerPollTimerRef.current && hasRemoteDescriptionRef.current) {
+            clearInterval(answerPollTimerRef.current);
+            answerPollTimerRef.current = null;
+          }
           return;
         }
 
         const dbAnswer = await CallingService.getAnswerSignal(newCall.id);
-        if (dbAnswer && peerConnectionRef.current && !hasRemoteDescriptionRef.current) {
-          console.log('[WebRTC-Call] Periodic poll retrieved answer from DB, applying remote description');
-          try {
-            await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(dbAnswer));
-            hasRemoteDescriptionRef.current = true;
+        if (dbAnswer && peerConnectionRef.current) {
+          const applied = await safeSetRemoteAnswer(
+            peerConnectionRef.current,
+            dbAnswer,
+            'poll_timer_answer'
+          );
+          if (applied) {
             const rxCandidates = await CallingService.getIceCandidates(newCall.id, targetUser.id);
             for (const c of rxCandidates) {
               const candKey = typeof c === 'string' ? c : JSON.stringify(c);
@@ -997,8 +1136,6 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
               clearInterval(answerPollTimerRef.current);
               answerPollTimerRef.current = null;
             }
-          } catch (e) {
-            console.warn('[WebRTC-Call] Error applying answer from periodic poll:', e);
           }
         }
       }, 1500);
@@ -1023,7 +1160,9 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const answerCall = async (consentAdminRecording: boolean) => {
     if (!activeCall || !user) return;
 
-    console.log('[WebRTC-Call] Answering incoming call:', activeCall.id);
+    const callId = activeCall.id;
+    handledCallIdsRef.current.add(callId);
+    console.log('[WebRTC-Call] Answering incoming call:', callId);
 
     if (timeoutTimerRef.current) {
       clearTimeout(timeoutTimerRef.current);
@@ -1116,6 +1255,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const rejectCall = async () => {
     if (!activeCall) return;
     const callId = activeCall.id;
+    handledCallIdsRef.current.add(callId);
+    terminatedCallIdsRef.current.add(callId);
     if (terminatingCallIdRef.current === callId) return;
     terminatingCallIdRef.current = callId;
 
@@ -1158,6 +1299,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
 
     const callId = activeCall.id;
+    handledCallIdsRef.current.add(callId);
+    terminatedCallIdsRef.current.add(callId);
     if (terminatingCallIdRef.current === callId) {
       console.log('[WebRTC-Call] Call already terminating for:', callId);
       return;
@@ -1643,6 +1786,32 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         isOpen={showGuidelines}
         onClose={() => setShowGuidelines(false)}
       />
+
+      {/* Admin Disconnect / Termination Notice Modal */}
+      {adminTerminationNotice && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-xs animate-in fade-in duration-200">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full text-center space-y-4 shadow-2xl border border-rose-200 animate-in zoom-in-95">
+            <div className="w-14 h-14 rounded-full bg-rose-100 text-rose-700 flex items-center justify-center mx-auto shadow-inner">
+              <PhoneOff className="w-7 h-7" />
+            </div>
+            <div>
+              <h3 className="font-bold text-slate-900 text-base sm:text-lg">
+                कॉल समाप्त (Call Ended)
+              </h3>
+              <p className="text-xs sm:text-sm text-slate-600 leading-relaxed mt-1.5 whitespace-pre-line">
+                {adminTerminationNotice}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setAdminTerminationNotice(null)}
+              className="w-full py-2.5 px-4 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs sm:text-sm rounded-xl transition cursor-pointer shadow-md"
+            >
+              समझ गया (OK)
+            </button>
+          </div>
+        </div>
+      )}
     </CallingContext.Provider>
   );
 };

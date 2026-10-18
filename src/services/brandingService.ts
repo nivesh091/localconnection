@@ -246,11 +246,28 @@ class BrandingStore {
 
     try {
       // 1. Persist to Supabase in admin_settings table row 'app_branding'
+      let existingAppBrandingJson: any = {};
+      try {
+        const { data: curBranding } = await supabase
+          .from('admin_settings')
+          .select('about_kaammitra_en')
+          .eq('id', 'app_branding')
+          .maybeSingle();
+        if (curBranding?.about_kaammitra_en) {
+          existingAppBrandingJson = JSON.parse(curBranding.about_kaammitra_en);
+        }
+      } catch {}
+
+      const mergedBrandingJson = {
+        ...existingAppBrandingJson,
+        ...updated,
+      };
+
       const { error } = await supabase.from('admin_settings').upsert({
         id: 'app_branding',
         home_welcome_en: updated.name_en,
         home_welcome_hi: updated.name_hi,
-        about_kaammitra_en: JSON.stringify(updated),
+        about_kaammitra_en: JSON.stringify(mergedBrandingJson),
         about_kaammitra_hi: `${updated.name_hi} / ${updated.name_en}`,
         updated_at: new Date().toISOString(),
       });

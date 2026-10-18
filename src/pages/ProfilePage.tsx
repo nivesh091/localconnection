@@ -44,6 +44,7 @@ import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
 import { CommentReference } from '../types';
 import { CallRecordingsSection } from '../components/CallRecordingsSection';
 import { CallingService } from '../services/callingService';
+import { useCallingSettings } from '../hooks/useCallingSettings';
 
 /**
  * Generates read-only address preview string from hierarchical location values
@@ -74,6 +75,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const { user, workerProfile, location, refreshUser, setWorkerProfile, updateWorkerPhotos } = useAuth();
   const { t, lang } = useTranslation();
   const { websiteName, websiteNameEn, resolvedShareUrl } = useWebsiteBranding();
+  const { mobileCallingEnabled, internetCallingEnabled } = useCallingSettings();
 
   const [categories, setCategories] = useState<WorkerCategory[]>([]);
   const [isEditingProfile, setIsEditingProfile] = useState(() => initialEditMode === 'profile' || initialEditMode === 'worker');
@@ -1003,78 +1005,84 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
       {/* =========================================================================
           MOBILE NUMBER PRIVACY / PUBLIC MOBILE NUMBER ON/OFF TOGGLE
           Placement: Directly below Edit Profile section & directly above “इस प्रकार की सहायता चाहिए”
+          Controlled by Admin Global: Mobile Network Calling
       ========================================================================== */}
-      <div className="p-4 bg-white border border-slate-200/90 rounded-2xl shadow-2xs space-y-1.5">
-        <div className="flex items-center justify-between">
-          <div className="pr-2">
-            <label
-              htmlFor="is-mobile-public-toggle"
-              className="font-semibold text-slate-800 text-xs sm:text-sm cursor-pointer select-none"
-              style={{ fontSize: '14px' }}
-            >
-              {lang === 'hi' ? 'मोबाइल नंबर से संपर्क की अनुमति' : 'Allow Contact by Mobile Number'}
-            </label>
+      {mobileCallingEnabled && (
+        <div className="p-4 bg-white border border-slate-200/90 rounded-2xl shadow-2xs space-y-1.5">
+          <div className="flex items-center justify-between">
+            <div className="pr-2">
+              <label
+                htmlFor="is-mobile-public-toggle"
+                className="font-semibold text-slate-800 text-xs sm:text-sm cursor-pointer select-none"
+                style={{ fontSize: '14px' }}
+              >
+                {lang === 'hi' ? 'मोबाइल नंबर से संपर्क की अनुमति' : 'Allow Contact by Mobile Number'}
+              </label>
 
-            <p className="text-[11px] text-slate-500 mt-0.5" style={{ fontSize: '13px' }}>
-              {isMobilePublic
-                ? (lang === 'hi'
-                    ? 'चालू (ON): आपका नंबर दिखाई देगा और लोग आपको सीधे कॉल या संदेश कर सकते हैं।'
-                    : 'ON: Your number will be visible, and people can call or message you directly.')
-                : (lang === 'hi'
-                    ? 'बंद (OFF): आपका मोबाइल नंबर अब किसी को दिखाई नहीं देगा। लोग आपको सीधे कॉल नहीं कर सकते, लेकिन आपको संदेश भेज सकते हैं।'
-                    : 'OFF: Your mobile number will be hidden. People cannot call you directly, but they can send you messages.')}
-            </p>
+              <p className="text-[11px] text-slate-500 mt-0.5" style={{ fontSize: '13px' }}>
+                {isMobilePublic
+                  ? (lang === 'hi'
+                      ? 'चालू (ON): आपका नंबर दिखाई देगा और लोग आपको सीधे कॉल या संदेश कर सकते हैं।'
+                      : 'ON: Your number will be visible, and people can call or message you directly.')
+                  : (lang === 'hi'
+                      ? 'बंद (OFF): आपका मोबाइल नंबर अब किसी को दिखाई नहीं देगा। लोग आपको सीधे कॉल नहीं कर सकते, लेकिन आपको संदेश भेज सकते हैं।'
+                      : 'OFF: Your mobile number will be hidden. People cannot call you directly, but they can send you messages.')}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-2">
+              <input
+                id="is-mobile-public-toggle"
+                type="checkbox"
+                checked={isMobilePublic}
+                onChange={(e) => handleToggleMobilePrivacy(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-700"></div>
+            </label>
           </div>
-          <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-2">
-            <input
-              id="is-mobile-public-toggle"
-              type="checkbox"
-              checked={isMobilePublic}
-              onChange={(e) => handleToggleMobilePrivacy(e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-700"></div>
-          </label>
         </div>
-      </div>
+      )}
 
       {/* =========================================================================
           INTERNET CALLING ON/OFF TOGGLE (Requirement 4)
           Strictly separate from Mobile Call setting
+          Controlled by Admin Global: Internet Calling
       ========================================================================== */}
-      <div className="p-4 bg-white border border-slate-200/90 rounded-2xl shadow-2xs space-y-1.5">
-        <div className="flex items-center justify-between">
-          <div className="pr-2">
-            <label
-              htmlFor="is-internet-call-toggle"
-              className="font-semibold text-slate-800 text-xs sm:text-sm cursor-pointer select-none"
-              style={{ fontSize: '14px' }}
-            >
-              {lang === 'hi' ? 'इंटरनेट कॉलिंग की अनुमति (Internet Calling)' : 'Allow Internet Calling'}
-            </label>
+      {internetCallingEnabled && (
+        <div className="p-4 bg-white border border-slate-200/90 rounded-2xl shadow-2xs space-y-1.5">
+          <div className="flex items-center justify-between">
+            <div className="pr-2">
+              <label
+                htmlFor="is-internet-call-toggle"
+                className="font-semibold text-slate-800 text-xs sm:text-sm cursor-pointer select-none"
+                style={{ fontSize: '14px' }}
+              >
+                {lang === 'hi' ? 'इंटरनेट कॉलिंग की अनुमति (Internet Calling)' : 'Allow Internet Calling'}
+              </label>
 
-            <p className="text-[11px] text-slate-500 mt-0.5" style={{ fontSize: '13px' }}>
-              {isInternetCallEnabled
-                ? (lang === 'hi'
-                    ? 'चालू (ON): अन्य उपयोगकर्ता आपको प्लेटफ़ॉर्म पर निःशुल्क इंटरनेट कॉल कर सकते हैं।'
-                    : 'ON: Other users can make free Internet calls to you on this platform.')
-                : (lang === 'hi'
-                    ? 'बंद (OFF): आपके लिए इंटरनेट कॉल बटन नहीं दिखेगा। लोग केवल संदेश भेज सकते हैं।'
-                    : 'OFF: Internet calling button will be hidden for you. People can only send messages.')}
-            </p>
+              <p className="text-[11px] text-slate-500 mt-0.5" style={{ fontSize: '13px' }}>
+                {isInternetCallEnabled
+                  ? (lang === 'hi'
+                      ? 'चालू (ON): अन्य उपयोगकर्ता आपको प्लेटफ़ॉर्म पर निःशुल्क इंटरनेट कॉल कर सकते हैं।'
+                      : 'ON: Other users can make free Internet calls to you on this platform.')
+                  : (lang === 'hi'
+                      ? 'बंद (OFF): आपके लिए इंटरनेट कॉल बटन नहीं दिखेगा। लोग केवल संदेश भेज सकते हैं।'
+                      : 'OFF: Internet calling button will be hidden for you. People can only send messages.')}
+              </p>
+            </div>
+            <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-2">
+              <input
+                id="is-internet-call-toggle"
+                type="checkbox"
+                checked={isInternetCallEnabled}
+                onChange={(e) => handleToggleInternetCalling(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-700"></div>
+            </label>
           </div>
-          <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-2">
-            <input
-              id="is-internet-call-toggle"
-              type="checkbox"
-              checked={isInternetCallEnabled}
-              onChange={(e) => handleToggleInternetCalling(e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-700"></div>
-          </label>
         </div>
-      </div>
+      )}
 
       {/* 5. FAVORITE WORKERS / पसंदीदा सेवा प्रदाता */}
       <div className="pt-1">

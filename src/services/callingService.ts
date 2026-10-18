@@ -9,6 +9,7 @@ import {
 } from '../types/calling';
 import { safeStorage } from '../lib/storage';
 import { invalidateChatCaches } from './chatService';
+import { AdminService } from './adminService';
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -108,6 +109,18 @@ export class CallingService {
     reason?: string;
   }> {
     try {
+      // 1. First enforce Admin Global Calling Control (fail-safe)
+      const callingSettings = await AdminService.getCallingSettings().catch(() => ({
+        mobile_calling_enabled: false,
+        internet_calling_enabled: false,
+      }));
+      if (!callingSettings.internet_calling_enabled) {
+        return {
+          allowed: false,
+          reason: 'कॉल एडमिन द्वारा बंद की गई है (Internet calling has been disabled by the administrator)',
+        };
+      }
+
       if (!targetUserId) {
         return { allowed: false, reason: 'उपयोगकर्ता उपलब्ध नहीं है' };
       }
@@ -132,7 +145,8 @@ export class CallingService {
 
       return { allowed: true };
     } catch {
-      return { allowed: true };
+      // Fail safely: do not allow a disabled calling method to be used
+      return { allowed: false, reason: 'कॉल सेवा अनुपलब्ध है' };
     }
   }
 
@@ -147,6 +161,18 @@ export class CallingService {
     callerProfile?: any;
   }): Promise<{ success: boolean; call?: CallRecord; error?: string }> {
     try {
+      // 1. Enforce Admin Global Calling Control (fail-safe)
+      const callingSettings = await AdminService.getCallingSettings().catch(() => ({
+        mobile_calling_enabled: false,
+        internet_calling_enabled: false,
+      }));
+      if (!callingSettings.internet_calling_enabled) {
+        return {
+          success: false,
+          error: 'कॉल एडमिन द्वारा बंद की गई है (Calling has been disabled by the administrator)',
+        };
+      }
+
       const eligibility = await this.canReceiveCall(params.receiverId);
       if (!eligibility.allowed) {
         return { success: false, error: eligibility.reason };

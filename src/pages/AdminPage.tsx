@@ -224,6 +224,9 @@ export const AdminPage: React.FC = () => {
 
   // Settings (secure defaults until loaded from database)
   const [callEnabled, setCallEnabled] = useState(false);
+  const [mobileCallingEnabled, setMobileCallingEnabled] = useState(true);
+  const [internetCallingEnabled, setInternetCallingEnabled] = useState(true);
+  const [isSavingCallingSettings, setIsSavingCallingSettings] = useState(false);
   const [contactNumber, setContactNumber] = useState('');
   const [aboutHi, setAboutHi] = useState('');
   const [aboutEn, setAboutEn] = useState('');
@@ -276,6 +279,8 @@ export const AdminPage: React.FC = () => {
         const s = await AdminService.getSettings();
         setSettings(s);
         setCallEnabled(s.admin_call_enabled);
+        setMobileCallingEnabled(s.mobile_calling_enabled !== false);
+        setInternetCallingEnabled(s.internet_calling_enabled !== false);
         setContactNumber(s.admin_contact_number);
         setAboutHi(s.about_kaammitra_hi);
         setAboutEn(s.about_kaammitra_en);
@@ -954,20 +959,93 @@ export const AdminPage: React.FC = () => {
 
   // Save Settings
   const handleSaveSettings = async () => {
-    const res = await AdminService.updateSettings({
-      admin_call_enabled: callEnabled,
-      admin_contact_number: contactNumber,
-      about_kaammitra_hi: aboutHi,
-      about_kaammitra_en: aboutEn,
-      home_welcome_hi: welcomeHi,
-      home_welcome_en: welcomeEn,
-      chat_retention_days: retentionDays,
-    });
+    setIsSavingCallingSettings(true);
+    try {
+      const res = await AdminService.updateSettings({
+        admin_call_enabled: callEnabled,
+        admin_contact_number: contactNumber,
+        about_kaammitra_hi: aboutHi,
+        about_kaammitra_en: aboutEn,
+        home_welcome_hi: welcomeHi,
+        home_welcome_en: welcomeEn,
+        chat_retention_days: retentionDays,
+        mobile_calling_enabled: mobileCallingEnabled,
+        internet_calling_enabled: internetCallingEnabled,
+      });
 
-    if (res.success) {
-      setNotice({ type: 'success', text: 'सेटिंग्स सफलतापूर्वक सहेजी गईं।' });
-    } else {
-      setNotice({ type: 'error', text: res.error || 'सेटिंग्स सहेजने में विफल।' });
+      if (res.success) {
+        setNotice({ type: 'success', text: 'सेटिंग्स सफलतापूर्वक सहेजी गईं।' });
+      } else {
+        setNotice({ type: 'error', text: res.error || 'सेटिंग्स सहेजने में विफल।' });
+      }
+    } finally {
+      setIsSavingCallingSettings(false);
+    }
+  };
+
+  // Toggle Mobile Network Calling with debounced/locked persistence
+  const handleToggleMobileCalling = async () => {
+    if (isSavingCallingSettings) return;
+    const nextVal = !mobileCallingEnabled;
+    setMobileCallingEnabled(nextVal);
+    setIsSavingCallingSettings(true);
+    try {
+      const res = await AdminService.updateSettings({
+        admin_call_enabled: callEnabled,
+        admin_contact_number: contactNumber,
+        about_kaammitra_hi: aboutHi,
+        about_kaammitra_en: aboutEn,
+        home_welcome_hi: welcomeHi,
+        home_welcome_en: welcomeEn,
+        chat_retention_days: retentionDays,
+        mobile_calling_enabled: nextVal,
+        internet_calling_enabled: internetCallingEnabled,
+      });
+
+      if (res.success) {
+        setNotice({
+          type: 'success',
+          text: `Mobile Network Calling: ${nextVal ? 'ON (चालू)' : 'OFF (बंद)'} सहेजा गया।`,
+        });
+      } else {
+        setMobileCallingEnabled(!nextVal); // revert on failure
+        setNotice({ type: 'error', text: res.error || 'सेटिंग्स सहेजने में विफल।' });
+      }
+    } finally {
+      setIsSavingCallingSettings(false);
+    }
+  };
+
+  // Toggle Internet Calling with debounced/locked persistence
+  const handleToggleInternetCalling = async () => {
+    if (isSavingCallingSettings) return;
+    const nextVal = !internetCallingEnabled;
+    setInternetCallingEnabled(nextVal);
+    setIsSavingCallingSettings(true);
+    try {
+      const res = await AdminService.updateSettings({
+        admin_call_enabled: callEnabled,
+        admin_contact_number: contactNumber,
+        about_kaammitra_hi: aboutHi,
+        about_kaammitra_en: aboutEn,
+        home_welcome_hi: welcomeHi,
+        home_welcome_en: welcomeEn,
+        chat_retention_days: retentionDays,
+        mobile_calling_enabled: mobileCallingEnabled,
+        internet_calling_enabled: nextVal,
+      });
+
+      if (res.success) {
+        setNotice({
+          type: 'success',
+          text: `Internet Calling: ${nextVal ? 'ON (चालू)' : 'OFF (बंद)'} सहेजा गया।`,
+        });
+      } else {
+        setInternetCallingEnabled(!nextVal); // revert on failure
+        setNotice({ type: 'error', text: res.error || 'सेटिंग्स सहेजने में विफल।' });
+      }
+    } finally {
+      setIsSavingCallingSettings(false);
     }
   };
 
@@ -1464,7 +1542,7 @@ export const AdminPage: React.FC = () => {
             activeSection === 'admin_call' ? 'bg-teal-800 text-white shadow-xs' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
           }`}
         >
-          4. Admin Call
+          4. Admin Call & Calling Settings
         </button>
         <button
           onClick={() => setActiveSection('about')}
@@ -2747,50 +2825,117 @@ export const AdminPage: React.FC = () => {
         </div>
       )}
 
-      {/* SECTION 3: ADMIN CALL */}
+      {/* SECTION 4: ADMIN CALL & CALLING SETTINGS */}
       {activeSection === 'admin_call' && (
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-4 max-w-xl shadow-xs">
+        <div className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 space-y-5 max-w-xl shadow-xs">
           <div>
-            <h3 className="text-sm sm:text-base font-bold text-slate-900">3. Admin Call सेटिंग्स</h3>
+            <h3 className="text-sm sm:text-base font-bold text-slate-900">4. Calling Settings (कॉलिंग सेटिंग्स)</h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Get Help पृष्ठ पर प्रदर्शित होने वाला एडमिन संपर्क नंबर और कॉल सुविधा।
+              ऐप में उपयोगकर्ताओं के लिए कॉलिंग विकल्प और एडमिन हेल्पलाइन नियंत्रित करें।
             </p>
           </div>
 
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200/80">
-            <div>
-              <span className="text-xs font-semibold text-slate-800 block">कॉल सुविधा चालू / बंद (ON/OFF)</span>
-              <span className="text-[11px] text-slate-500">उपयोगकर्ताओं को ऐप से सीधे एडमिन को कॉल करने की अनुमति दें।</span>
+          {/* Independent Calling Controls */}
+          <div className="space-y-3 pt-2 border-t border-slate-100">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              ग्लोबल कॉलिंग नियंत्रण (Global Calling Controls)
+            </h4>
+
+            {/* A. Mobile Network Calling */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200/80">
+              <div className="pr-2">
+                <span className="text-xs font-semibold text-slate-800 block">Mobile Network Calling</span>
+                <span className="text-[11px] text-slate-500">
+                  {mobileCallingEnabled
+                    ? 'चालू (ON): उपयोगकर्ताओं के प्रोफ़ाइल में मोबाइल कॉलिंग विकल्प उपलब्ध रहेगा।'
+                    : 'बंद (OFF): उपयोगकर्ताओं के प्रोफ़ाइल से मोबाइल कॉलिंग विकल्प पूरी तरह छिपा रहेगा और इन-ऐप मोबाइल कॉल ब्लॉक रहेगी।'}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={isSavingCallingSettings}
+                onClick={handleToggleMobileCalling}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 shadow-2xs disabled:opacity-50 ${
+                  mobileCallingEnabled ? 'bg-teal-700 text-white' : 'bg-slate-300 text-slate-700'
+                }`}
+              >
+                {mobileCallingEnabled ? 'ON' : 'OFF'}
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setCallEnabled(!callEnabled)}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 shadow-2xs ${
-                callEnabled ? 'bg-teal-700 text-white' : 'bg-slate-300 text-slate-700'
-              }`}
-            >
-              {callEnabled ? 'चालू (ON)' : 'बंद (OFF)'}
-            </button>
+
+            {/* B. Internet Calling */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200/80">
+              <div className="pr-2">
+                <span className="text-xs font-semibold text-slate-800 block">Internet Calling</span>
+                <span className="text-[11px] text-slate-500">
+                  {internetCallingEnabled
+                    ? 'चालू (ON): उपयोगकर्ताओं के प्रोफ़ाइल में इंटरनेट कॉलिंग विकल्प उपलब्ध रहेगा और इन-ऐप कॉल कार्य करेगी।'
+                    : 'बंद (OFF): उपयोगकर्ताओं के प्रोफ़ाइल से इंटरनेट कॉलिंग विकल्प पूरी तरह छिपा रहेगा और सभी इंटरनेट कॉल ब्लॉक रहेंगी।'}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled={isSavingCallingSettings}
+                onClick={handleToggleInternetCalling}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 shadow-2xs disabled:opacity-50 ${
+                  internetCallingEnabled ? 'bg-teal-700 text-white' : 'bg-slate-300 text-slate-700'
+                }`}
+              >
+                {internetCallingEnabled ? 'ON' : 'OFF'}
+              </button>
+            </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              एडमिन हेल्पलाइन नंबर
-            </label>
-            <input
-              type="tel"
-              value={contactNumber}
-              onChange={(e) => setContactNumber(e.target.value)}
-              className="w-full px-3.5 py-2 border border-slate-300 rounded-xl text-xs sm:text-sm font-mono focus:outline-none focus:border-teal-700 bg-white"
-            />
+          {/* Admin Helpline Direct Call */}
+          <div className="space-y-3 pt-3 border-t border-slate-100">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
+              एडमिन हेल्पलाइन (Admin Helpline)
+            </h4>
+
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-3.5 bg-slate-50 rounded-xl border border-slate-200/80">
+              <div>
+                <span className="text-xs font-semibold text-slate-800 block">हेल्पलाइन कॉल सुविधा चालू / बंद (ON/OFF)</span>
+                <span className="text-[11px] text-slate-500">उपयोगकर्ताओं को Get Help पृष्ठ से सीधे एडमिन को कॉल करने की अनुमति दें।</span>
+              </div>
+              <button
+                type="button"
+                disabled={isSavingCallingSettings}
+                onClick={() => setCallEnabled(!callEnabled)}
+                className={`px-4 py-2 rounded-xl text-xs font-bold transition cursor-pointer shrink-0 shadow-2xs disabled:opacity-50 ${
+                  callEnabled ? 'bg-teal-700 text-white' : 'bg-slate-300 text-slate-700'
+                }`}
+              >
+                {callEnabled ? 'चालू (ON)' : 'बंद (OFF)'}
+              </button>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                एडमिन हेल्पलाइन नंबर
+              </label>
+              <input
+                type="tel"
+                value={contactNumber}
+                onChange={(e) => setContactNumber(e.target.value)}
+                className="w-full px-3.5 py-2 border border-slate-300 rounded-xl text-xs sm:text-sm font-mono focus:outline-none focus:border-teal-700 bg-white"
+              />
+            </div>
           </div>
 
           <button
             type="button"
+            disabled={isSavingCallingSettings}
             onClick={handleSaveSettings}
-            className="px-5 py-2.5 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs rounded-xl transition cursor-pointer shadow-2xs"
+            className="px-5 py-2.5 bg-teal-800 hover:bg-teal-900 text-white font-bold text-xs rounded-xl transition cursor-pointer shadow-2xs disabled:opacity-50 flex items-center gap-2"
           >
-            सहेजें (Save Call Settings)
+            {isSavingCallingSettings ? (
+              <>
+                <span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                <span>सहेजा जा रहा है...</span>
+              </>
+            ) : (
+              <span>सहेजें (Save Call Settings)</span>
+            )}
           </button>
         </div>
       )}

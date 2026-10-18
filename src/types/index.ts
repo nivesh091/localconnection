@@ -225,6 +225,8 @@ export interface AdminSettings {
   chat_retention_days: number;
   call_recording_retention_days?: number; // 1, 10, 15, or 30 days (default 30)
   show_requirements_on_map?: boolean; // Admin only: Show requirements on Map (default false)
+  mobile_calling_enabled?: boolean; // Admin Global Control: Mobile Network Calling ON/OFF (default true)
+  internet_calling_enabled?: boolean; // Admin Global Control: Internet Calling ON/OFF (default true)
   updated_at: string;
 }
 

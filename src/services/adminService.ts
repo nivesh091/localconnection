@@ -27,6 +27,16 @@ let cachedAdminSettings: { data: AdminSettings; timestamp: number } | null = nul
 let settingsInFlight: Promise<AdminSettings> | null = null;
 const SETTINGS_CACHE_TTL = 60000; // 60 seconds
 
+export interface CallingSettingsControls {
+  mobile_calling_enabled: boolean;
+  internet_calling_enabled: boolean;
+}
+
+let cachedCallingSettings: { mobile_calling_enabled: boolean; internet_calling_enabled: boolean; timestamp: number } | null = null;
+type CallingSettingsListener = (settings: CallingSettingsControls) => void;
+const callingSettingsListeners = new Set<CallingSettingsListener>();
+let isCallingSettingsSubscribed = false;
+
 export class AdminService {
   /**
    * Get Admin Settings (Section 75 & 76)
@@ -59,6 +69,7 @@ export class AdminService {
 
         if (error || !data) {
           if (error) isSchemaCacheError(error);
+          // Fail safe: If settings cannot be loaded or verified, do not allow disabled calling methods to be used
           const fallback: AdminSettings = {
             id: 'general',
             admin_call_enabled: false, // SECURE DEFAULT: NEVER true on fallback/unknown
@@ -72,6 +83,8 @@ export class AdminService {
             chat_retention_days: 30,
             call_recording_retention_days: 30,
             show_requirements_on_map: localReqMapOverride,
+            mobile_calling_enabled: cachedCallingSettings ? cachedCallingSettings.mobile_calling_enabled : false,
+            internet_calling_enabled: cachedCallingSettings ? cachedCallingSettings.internet_calling_enabled : false,
             updated_at: new Date().toISOString(),
           };
           cachedAdminSettings = { data: fallback, timestamp: Date.now() };
@@ -82,6 +95,64 @@ export class AdminService {
           data.show_requirements_on_map !== undefined && data.show_requirements_on_map !== null
             ? Boolean(data.show_requirements_on_map)
             : localReqMapOverride;
+
+        // Resolve independent calling controls
+        let resolvedMobileCalling = true;
+        let resolvedInternetCalling = true;
+
+        if (data.mobile_calling_enabled !== undefined && data.mobile_calling_enabled !== null) {
+          resolvedMobileCalling = Boolean(data.mobile_calling_enabled);
+        }
+        if (data.internet_calling_enabled !== undefined && data.internet_calling_enabled !== null) {
+          resolvedInternetCalling = Boolean(data.internet_calling_enabled);
+        }
+
+        // Resilient persistence check: First inspect app_branding metadata, then calling_controls row
+        if (data.mobile_calling_enabled === undefined || data.internet_calling_enabled === undefined) {
+          try {
+            const { data: bRow } = await supabase
+              .from('admin_settings')
+              .select('about_kaammitra_en')
+              .eq('id', 'app_branding')
+              .maybeSingle();
+
+            if (bRow?.about_kaammitra_en) {
+              try {
+                const bParsed = JSON.parse(bRow.about_kaammitra_en);
+                if (bParsed?.calling_controls) {
+                  if (bParsed.calling_controls.mobile_calling_enabled !== undefined) {
+                    resolvedMobileCalling = Boolean(bParsed.calling_controls.mobile_calling_enabled);
+                  }
+                  if (bParsed.calling_controls.internet_calling_enabled !== undefined) {
+                    resolvedInternetCalling = Boolean(bParsed.calling_controls.internet_calling_enabled);
+                  }
+                }
+              } catch {}
+            }
+
+            const { data: ctrlRow } = await supabase
+              .from('admin_settings')
+              .select('about_kaammitra_hi, about_kaammitra_en')
+              .eq('id', 'calling_controls')
+              .maybeSingle();
+
+            if (ctrlRow?.about_kaammitra_en) {
+              const parsed = JSON.parse(ctrlRow.about_kaammitra_en);
+              if (parsed.mobile_calling_enabled !== undefined) {
+                resolvedMobileCalling = Boolean(parsed.mobile_calling_enabled);
+              }
+              if (parsed.internet_calling_enabled !== undefined) {
+                resolvedInternetCalling = Boolean(parsed.internet_calling_enabled);
+              }
+            }
+          } catch {}
+        }
+
+        cachedCallingSettings = {
+          mobile_calling_enabled: resolvedMobileCalling,
+          internet_calling_enabled: resolvedInternetCalling,
+          timestamp: Date.now(),
+        };
 
         const resolvedWelcomeHi = (data.home_welcome_hi || '')
           .replace(/काम\s*मित्र/g, currentNameHi)
@@ -123,6 +194,8 @@ export class AdminService {
           about_kaammitra_en: resolvedAboutEn || data.about_kaammitra_en,
           call_recording_retention_days: data.call_recording_retention_days || 30,
           show_requirements_on_map: resolvedShowReqsOnMap,
+          mobile_calling_enabled: resolvedMobileCalling,
+          internet_calling_enabled: resolvedInternetCalling,
         };
 
         cachedAdminSettings = { data: mergedData, timestamp: Date.now() };
@@ -146,6 +219,8 @@ export class AdminService {
           home_welcome_en: `Welcome to ${currentNameEn}`,
           chat_retention_days: 30,
           show_requirements_on_map: localReqMapOverride,
+          mobile_calling_enabled: cachedCallingSettings ? cachedCallingSettings.mobile_calling_enabled : false,
+          internet_calling_enabled: cachedCallingSettings ? cachedCallingSettings.internet_calling_enabled : false,
           updated_at: new Date().toISOString(),
         };
         return fallback;
@@ -163,6 +238,101 @@ export class AdminService {
   static invalidateSettingsCache(): void {
     cachedAdminSettings = null;
     settingsInFlight = null;
+    cachedCallingSettings = null;
+  }
+
+  /**
+   * Get cached Calling Settings synchronously if valid
+   */
+  static getCachedCallingSettings(): CallingSettingsControls | null {
+    if (cachedCallingSettings && Date.now() - cachedCallingSettings.timestamp < SETTINGS_CACHE_TTL) {
+      return {
+        mobile_calling_enabled: cachedCallingSettings.mobile_calling_enabled,
+        internet_calling_enabled: cachedCallingSettings.internet_calling_enabled,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Get authoritative Calling Settings
+   */
+  static async getCallingSettings(): Promise<CallingSettingsControls> {
+    const cached = this.getCachedCallingSettings();
+    if (cached) return cached;
+    const settings = await this.getSettings();
+    return {
+      mobile_calling_enabled: settings.mobile_calling_enabled !== false,
+      internet_calling_enabled: settings.internet_calling_enabled !== false,
+    };
+  }
+
+  /**
+   * Notify calling settings listeners
+   */
+  static notifyCallingSettingsListeners(settings: CallingSettingsControls): void {
+    callingSettingsListeners.forEach((fn) => {
+      try {
+        fn(settings);
+      } catch (err) {
+        console.error('Error in calling settings listener:', err);
+      }
+    });
+  }
+
+  /**
+   * Realtime subscription for Calling Settings
+   */
+  static subscribeToCallingSettings(
+    callback: (settings: CallingSettingsControls) => void
+  ): () => void {
+    callingSettingsListeners.add(callback);
+
+    // Call immediately if cached
+    const cached = this.getCachedCallingSettings();
+    if (cached) {
+      callback(cached);
+    } else {
+      this.getCallingSettings().then((s) => callback(s)).catch(() => {});
+    }
+
+    if (!isCallingSettingsSubscribed) {
+      isCallingSettingsSubscribed = true;
+      try {
+        supabase
+          .channel('calling_controls_realtime')
+          .on(
+            'postgres_changes',
+            { event: '*', schema: 'public', table: 'admin_settings' },
+            async () => {
+              AdminService.invalidateSettingsCache();
+              const fresh = await AdminService.getCallingSettings();
+              AdminService.notifyCallingSettingsListeners(fresh);
+            }
+          )
+          .on(
+            'broadcast',
+            { event: 'calling_settings_updated' },
+            (payload: any) => {
+              if (payload?.payload) {
+                const s: CallingSettingsControls = {
+                  mobile_calling_enabled: Boolean(payload.payload.mobile_calling_enabled),
+                  internet_calling_enabled: Boolean(payload.payload.internet_calling_enabled),
+                };
+                cachedCallingSettings = { ...s, timestamp: Date.now() };
+                AdminService.notifyCallingSettingsListeners(s);
+              }
+            }
+          )
+          .subscribe();
+      } catch (err) {
+        console.warn('Realtime subscription setup notice for calling controls:', err);
+      }
+    }
+
+    return () => {
+      callingSettingsListeners.delete(callback);
+    };
   }
 
   /**
@@ -178,15 +348,170 @@ export class AdminService {
         } catch {}
       }
 
+      const hasCallingUpdates =
+        updates.mobile_calling_enabled !== undefined ||
+        updates.internet_calling_enabled !== undefined;
+
       const { error } = await supabase.from('admin_settings').upsert({
         id: 'general',
         ...updates,
         updated_at: new Date().toISOString(),
       });
 
-      if (error) return { success: false, error: error.message };
-      // Immediately invalidate in-memory cache so setting changes reflect instantly
+      if (error) {
+        // If columns do not exist in Postgres schema (error 42703), fallback by updating general
+        // without those columns and storing calling controls in 'calling_controls' row
+        if (
+          error.code === '42703' ||
+          error.message?.includes('column') ||
+          error.message?.includes('does not exist')
+        ) {
+          const { mobile_calling_enabled, internet_calling_enabled, ...restUpdates } = updates;
+          const { error: genErr } = await supabase.from('admin_settings').upsert({
+            id: 'general',
+            ...restUpdates,
+            updated_at: new Date().toISOString(),
+          });
+          if (genErr) return { success: false, error: genErr.message };
+
+          if (hasCallingUpdates) {
+            const currentCalling = await this.getCallingSettings();
+            const newMobile =
+              mobile_calling_enabled !== undefined
+                ? Boolean(mobile_calling_enabled)
+                : currentCalling.mobile_calling_enabled;
+            const newInternet =
+              internet_calling_enabled !== undefined
+                ? Boolean(internet_calling_enabled)
+                : currentCalling.internet_calling_enabled;
+            const payload = JSON.stringify({
+              mobile_calling_enabled: newMobile,
+              internet_calling_enabled: newInternet,
+            });
+
+            // Persist to app_branding row
+            try {
+              const { data: bRow } = await supabase
+                .from('admin_settings')
+                .select('about_kaammitra_en')
+                .eq('id', 'app_branding')
+                .maybeSingle();
+              let bJson: any = {};
+              try {
+                if (bRow?.about_kaammitra_en) {
+                  bJson = JSON.parse(bRow.about_kaammitra_en);
+                }
+              } catch {}
+              bJson.calling_controls = {
+                mobile_calling_enabled: newMobile,
+                internet_calling_enabled: newInternet,
+              };
+              await supabase
+                .from('admin_settings')
+                .update({
+                  about_kaammitra_en: JSON.stringify(bJson),
+                  updated_at: new Date().toISOString(),
+                })
+                .eq('id', 'app_branding');
+            } catch {}
+
+            try {
+              await supabase.from('admin_settings').upsert({
+                id: 'calling_controls',
+                about_kaammitra_hi: payload,
+                about_kaammitra_en: payload,
+                updated_at: new Date().toISOString(),
+              });
+            } catch {}
+          }
+        } else {
+          return { success: false, error: error.message };
+        }
+      } else if (hasCallingUpdates) {
+        // Also persist calling_controls in app_branding
+        try {
+          const { data: bRow } = await supabase
+            .from('admin_settings')
+            .select('about_kaammitra_en')
+            .eq('id', 'app_branding')
+            .maybeSingle();
+          let bJson: any = {};
+          try {
+            if (bRow?.about_kaammitra_en) {
+              bJson = JSON.parse(bRow.about_kaammitra_en);
+            }
+          } catch {}
+          bJson.calling_controls = {
+            mobile_calling_enabled: updates.mobile_calling_enabled,
+            internet_calling_enabled: updates.internet_calling_enabled,
+          };
+          await supabase
+            .from('admin_settings')
+            .update({
+              about_kaammitra_en: JSON.stringify(bJson),
+              updated_at: new Date().toISOString(),
+            })
+            .eq('id', 'app_branding');
+        } catch {}
+
+        try {
+          const payload = JSON.stringify({
+            mobile_calling_enabled: updates.mobile_calling_enabled,
+            internet_calling_enabled: updates.internet_calling_enabled,
+          });
+          await supabase.from('admin_settings').upsert({
+            id: 'calling_controls',
+            about_kaammitra_hi: payload,
+            about_kaammitra_en: payload,
+            updated_at: new Date().toISOString(),
+          });
+        } catch {}
+      }
+
+      // Immediately invalidate cache
       cachedAdminSettings = null;
+      if (hasCallingUpdates) {
+        const newMobile =
+          updates.mobile_calling_enabled !== undefined
+            ? Boolean(updates.mobile_calling_enabled)
+            : (cachedCallingSettings?.mobile_calling_enabled ?? true);
+        const newInternet =
+          updates.internet_calling_enabled !== undefined
+            ? Boolean(updates.internet_calling_enabled)
+            : (cachedCallingSettings?.internet_calling_enabled ?? true);
+
+        cachedCallingSettings = {
+          mobile_calling_enabled: newMobile,
+          internet_calling_enabled: newInternet,
+          timestamp: Date.now(),
+        };
+
+        // Notify local subscribers instantly
+        this.notifyCallingSettingsListeners({
+          mobile_calling_enabled: newMobile,
+          internet_calling_enabled: newInternet,
+        });
+
+        // Broadcast to other tabs/clients via Supabase Realtime Broadcast
+        try {
+          const broadcastCh = supabase.channel('calling_controls_broadcast');
+          broadcastCh.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+              broadcastCh.send({
+                type: 'broadcast',
+                event: 'calling_settings_updated',
+                payload: {
+                  mobile_calling_enabled: newMobile,
+                  internet_calling_enabled: newInternet,
+                },
+              }).then(() => {
+                setTimeout(() => supabase.removeChannel(broadcastCh), 2500);
+              }).catch(() => {});
+            }
+          });
+        } catch {}
+      }
+
       return { success: true };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : 'त्रुटि' };

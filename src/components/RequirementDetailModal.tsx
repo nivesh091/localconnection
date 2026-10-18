@@ -17,6 +17,7 @@ import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
 import verificationLogo from '@/verificationlogo.png';
 import { WorkerService } from '../services/workerService';
 import { useCalling } from '../context/CallingContext';
+import { useCallingSettings } from '../hooks/useCallingSettings';
 
 interface RequirementDetailModalProps {
   requirement?: Requirement | null;
@@ -41,6 +42,8 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
 }) => {
   const { user, location: userLocation, isAdmin, refreshUser } = useAuth();
   const { startCall } = useCalling();
+  const { mobileCallingEnabled, internetCallingEnabled } = useCallingSettings();
+  const [callNotice, setCallNotice] = useState<string | null>(null);
   const { lang } = useTranslation();
   const [showPhotoViewer, setShowPhotoViewer] = useState(false);
   const [zoomedPhotoUrl, setZoomedPhotoUrl] = useState<string | null>(null);
@@ -103,8 +106,18 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
   const canViewMobile = isMobilePublic || isAdmin;
   const mobile = canViewMobile ? (owner?.mobile?.trim() || '') : '';
 
-  const showCallButton = Boolean(isMobilePublic && mobile) || isInternetCallEnabled;
-  const isInternetCallAction = isInternetCallEnabled;
+  // Global Admin Calling Controls:
+  const bothCallingDisabled = !mobileCallingEnabled && !internetCallingEnabled;
+  const canUseInternetCall = internetCallingEnabled && isInternetCallEnabled;
+  const canUseMobileCall = mobileCallingEnabled && Boolean(isMobilePublic && mobile);
+
+  // Preserve Call button when both methods are OFF (Requirement 4)
+  const showCallButton =
+    bothCallingDisabled ||
+    canUseInternetCall ||
+    canUseMobileCall;
+
+  const isInternetCallAction = canUseInternetCall;
 
   const categoryName = requirement?.category || (lang === 'hi' ? 'सेवा विशेषज्ञ' : 'Service Expert');
   const maxBudget = requirement?.maximum_budget || 0;
@@ -249,13 +262,57 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
       onRequireAuth();
       return;
     }
-    if (isInternetCallAction && owner) {
+
+    // Both methods OFF: Show clear message without initiating call (Requirement 4)
+    if (bothCallingDisabled) {
+      setCallNotice(
+        lang === 'hi'
+          ? 'कॉल एडमिन द्वारा बंद की गई है'
+          : 'Calling has been disabled by the administrator.'
+      );
+      setTimeout(() => setCallNotice(null), 3500);
+      return;
+    }
+
+    // Prioritize Internet Calling if allowed globally and by owner
+    if (canUseInternetCall && owner) {
       onClose();
       startCall(owner);
       return;
     }
-    if (!mobile) return;
-    window.location.href = `tel:${mobile}`;
+
+    // Otherwise use tel: if mobile calling is allowed globally and number is available
+    if (canUseMobileCall && mobile) {
+      window.location.href = `tel:${mobile}`;
+      return;
+    }
+
+    if (mobileCallingEnabled && !canUseMobileCall) {
+      setCallNotice(
+        lang === 'hi'
+          ? 'नंबर उपलब्ध नहीं है'
+          : 'Number not available'
+      );
+      setTimeout(() => setCallNotice(null), 3500);
+      return;
+    }
+
+    if (internetCallingEnabled && !canUseInternetCall) {
+      setCallNotice(
+        lang === 'hi'
+          ? 'उपयोगकर्ता ने इंटरनेट कॉलिंग बंद कर रखी है'
+          : 'User has disabled internet calling'
+      );
+      setTimeout(() => setCallNotice(null), 3500);
+      return;
+    }
+
+    setCallNotice(
+      lang === 'hi'
+        ? 'कॉल एडमिन द्वारा बंद की गई है'
+        : 'Calling has been disabled by the administrator.'
+    );
+    setTimeout(() => setCallNotice(null), 3500);
   };
 
   const handleOpenReport = () => {
@@ -276,9 +333,16 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden my-auto animate-in zoom-in-95 duration-150 flex flex-col max-h-[90vh]"
+        className="w-full max-w-lg bg-white rounded-2xl shadow-2xl overflow-hidden my-auto animate-in zoom-in-95 duration-150 flex flex-col max-h-[90vh] relative"
         onClick={(e) => e.stopPropagation()}
       >
+        {/* Notice toast if call disabled or number unavailable */}
+        {callNotice && (
+          <div className="absolute top-16 left-1/2 -translate-x-1/2 z-50 bg-slate-900/95 text-white text-xs font-bold py-1.5 px-4 rounded-full shadow-lg border border-slate-700 animate-in fade-in duration-150 text-center max-w-[90%] pointer-events-none">
+            {callNotice}
+          </div>
+        )}
+
         {/* Header Bar */}
         <div className="bg-[#1e3a5f] text-white px-4 py-3 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-2 min-w-0">
