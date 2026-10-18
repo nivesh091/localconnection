@@ -42,6 +42,8 @@ import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
 
 import { CommentReference } from '../types';
+import { CallRecordingsSection } from '../components/CallRecordingsSection';
+import { CallingService } from '../services/callingService';
 
 /**
  * Generates read-only address preview string from hierarchical location values
@@ -212,6 +214,7 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
   const [name, setName] = useState('');
   const [mobile, setMobile] = useState('');
   const [isMobilePublic, setIsMobilePublic] = useState(true); // Feature 3: Public Mobile Number ON/OFF (Default: ON)
+  const [isInternetCallEnabled, setIsInternetCallEnabled] = useState(true); // Internet Calling ON/OFF
   const [address, setAddress] = useState('');
   const [selectedLocation, setSelectedLocation] = useState<LocationPickerValue | null>(null);
 
@@ -277,6 +280,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
       setIsActive(workerProfile.is_active !== false);
       if (workerProfile.is_mobile_public !== undefined && !isTogglingPrivacyRef.current) {
         setIsMobilePublic(workerProfile.is_mobile_public);
+      }
+      if (workerProfile.is_internet_call_enabled !== undefined) {
+        setIsInternetCallEnabled(workerProfile.is_internet_call_enabled);
+      } else if (user?.is_internet_call_enabled !== undefined) {
+        setIsInternetCallEnabled(user.is_internet_call_enabled);
       }
       setAboutText(workerProfile.about_text || '');
     }
@@ -636,6 +644,51 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
     }
   };
 
+  // Instant Internet Calling Toggle on Profile page with Supabase sync
+  const handleToggleInternetCalling = async (newVal: boolean) => {
+    if (!user) return;
+    setIsInternetCallEnabled(newVal);
+    if (workerProfile) {
+      setWorkerProfile({
+        ...workerProfile,
+        is_internet_call_enabled: newVal,
+      });
+    }
+    CallingService.setLocalCallPreference(user.id, 'internetCallingEnabled', newVal);
+    try {
+      await ProfileService.updateProfile(user.id, {
+        is_internet_call_enabled: newVal,
+      } as any);
+
+      if (workerProfile) {
+        await WorkerService.saveWorkerProfile(user.id, {
+          category_id: workerProfile.category_id,
+          other_category: workerProfile.other_category,
+          experience_years: workerProfile.experience_years,
+          price_per_day: workerProfile.price_per_day,
+          price_unit: workerProfile.price_unit,
+          custom_price_unit: workerProfile.custom_price_unit,
+          is_active: workerProfile.is_active,
+          is_mobile_public: isMobilePublic,
+          is_internet_call_enabled: newVal,
+          about_text: workerProfile.about_text,
+        });
+        WorkerService.invalidateCache(user.id);
+      }
+      ProfileService.invalidateCache(user.id);
+      await refreshUser(true);
+      setStatusMsg({
+        type: 'success',
+        text: newVal
+          ? (lang === 'hi' ? 'इंटरनेट कॉलिंग अब चालू (ON) है।' : 'Internet calling is now ON.')
+          : (lang === 'hi' ? 'इंटरनेट कॉलिंग अब बंद (OFF) है।' : 'Internet calling is now OFF.'),
+      });
+      setTimeout(() => setStatusMsg(null), 3500);
+    } catch {
+      setIsInternetCallEnabled(!newVal);
+    }
+  };
+
   // Upload Worker Voice
   const handleUploadWorkerVoice = async (blob: Blob) => {
     if (!user) return;
@@ -985,6 +1038,44 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
         </div>
       </div>
 
+      {/* =========================================================================
+          INTERNET CALLING ON/OFF TOGGLE (Requirement 4)
+          Strictly separate from Mobile Call setting
+      ========================================================================== */}
+      <div className="p-4 bg-white border border-slate-200/90 rounded-2xl shadow-2xs space-y-1.5">
+        <div className="flex items-center justify-between">
+          <div className="pr-2">
+            <label
+              htmlFor="is-internet-call-toggle"
+              className="font-semibold text-slate-800 text-xs sm:text-sm cursor-pointer select-none"
+              style={{ fontSize: '14px' }}
+            >
+              {lang === 'hi' ? 'इंटरनेट कॉलिंग की अनुमति (Internet Calling)' : 'Allow Internet Calling'}
+            </label>
+
+            <p className="text-[11px] text-slate-500 mt-0.5" style={{ fontSize: '13px' }}>
+              {isInternetCallEnabled
+                ? (lang === 'hi'
+                    ? 'चालू (ON): अन्य उपयोगकर्ता आपको प्लेटफ़ॉर्म पर निःशुल्क इंटरनेट कॉल कर सकते हैं।'
+                    : 'ON: Other users can make free Internet calls to you on this platform.')
+                : (lang === 'hi'
+                    ? 'बंद (OFF): आपके लिए इंटरनेट कॉल बटन नहीं दिखेगा। लोग केवल संदेश भेज सकते हैं।'
+                    : 'OFF: Internet calling button will be hidden for you. People can only send messages.')}
+            </p>
+          </div>
+          <label className="relative inline-flex items-center cursor-pointer shrink-0 ml-2">
+            <input
+              id="is-internet-call-toggle"
+              type="checkbox"
+              checked={isInternetCallEnabled}
+              onChange={(e) => handleToggleInternetCalling(e.target.checked)}
+              className="sr-only peer"
+            />
+            <div className="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-teal-700"></div>
+          </label>
+        </div>
+      </div>
+
       {/* 5. FAVORITE WORKERS / पसंदीदा सेवा प्रदाता */}
       <div className="pt-1">
         <FavoriteWorkersSection
@@ -1041,6 +1132,11 @@ export const ProfilePage: React.FC<ProfilePageProps> = ({
           <Code className="w-4 h-4 text-teal-700 group-hover:scale-110 transition-transform shrink-0" />
           <span>About Developer</span>
         </button>
+      </div>
+
+      {/* 9. CALL RECORDINGS — Immediately below About Developer (Requirement 9) */}
+      <div className="pt-2">
+        <CallRecordingsSection lang={lang} />
       </div>
 
       {/* =========================================================================

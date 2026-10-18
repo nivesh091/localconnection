@@ -1,0 +1,40 @@
+name: Purge Expired Call Recordings
+
+on:
+  schedule:
+    # Run every day at 02:00 UTC (07:30 AM IST)
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+    # Allows manual trigger from GitHub Actions tab for testing
+
+jobs:
+  purge-recordings:
+    name: Trigger Purge Edge Function
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call Supabase Purge Edge Function
+        run: |
+          if [ -z "${{ secrets.SUPABASE_URL }}" ] || [ -z "${{ secrets.CRON_SECRET }}" ]; then
+            echo "::error::Missing SUPABASE_URL or CRON_SECRET GitHub secret. Please configure repository secrets."
+            exit 1
+          fi
+
+          ENDPOINT="${{ secrets.SUPABASE_URL }}/functions/v1/purge-expired-recordings"
+          echo "Triggering scheduled purge at ${ENDPOINT}..."
+
+          HTTP_RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${ENDPOINT}" \
+            -H "Content-Type: application/json" \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}")
+
+          HTTP_BODY=$(echo "$HTTP_RESPONSE" | sed '$d')
+          HTTP_STATUS=$(echo "$HTTP_RESPONSE" | tail -n1)
+
+          echo "HTTP Status: ${HTTP_STATUS}"
+          echo "Response Body: ${HTTP_BODY}"
+
+          if [ "$HTTP_STATUS" -ne 200 ] && [ "$HTTP_STATUS" -ne 207 ]; then
+            echo "::error::Purge job failed with status code ${HTTP_STATUS}"
+            exit 1
+          fi
+
+          echo "Purge job executed successfully."

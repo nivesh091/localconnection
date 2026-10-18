@@ -5,6 +5,7 @@ export interface WorkerMetadata {
   custom_price_unit?: string | null;
   is_active?: boolean;
   is_mobile_public?: boolean;
+  is_internet_call_enabled?: boolean;
   legacy_skills?: string | null;
 }
 
@@ -43,6 +44,7 @@ export function extractAboutAndMetadata(rawAbout?: string | null): {
           custom_price_unit: parsed.custom_price_unit || null,
           is_active: parsed.is_active !== undefined ? Boolean(parsed.is_active) : true,
           is_mobile_public: parsed.is_mobile_public !== undefined ? Boolean(parsed.is_mobile_public) : true,
+          is_internet_call_enabled: parsed.is_internet_call_enabled !== undefined ? Boolean(parsed.is_internet_call_enabled) : true,
           legacy_skills: parsed.legacy_skills || null,
         },
       };
@@ -56,6 +58,7 @@ export function extractAboutAndMetadata(rawAbout?: string | null): {
       custom_price_unit: null,
       is_active: true,
       is_mobile_public: true,
+      is_internet_call_enabled: true,
       legacy_skills: null,
     },
   };

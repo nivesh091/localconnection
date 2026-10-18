@@ -976,6 +976,7 @@ export class WorkerService {
       custom_price_unit?: string | null;
       is_active?: boolean;
       is_mobile_public?: boolean;
+      is_internet_call_enabled?: boolean;
       about_text?: string | null;
     }
   ): Promise<{ success: boolean; error?: string }> {

@@ -44,6 +44,7 @@ import {
   resolveWorkerCertificateData,
   CertificateData,
 } from '../components/WorkerCertificateCard';
+import { AdminCallRecordingsSection } from '../components/AdminCallRecordingsSection';
 import { uploadBrandingLogo } from '../services/brandingService';
 import {
   UserProfile,
@@ -141,6 +142,7 @@ export const AdminPage: React.FC = () => {
     | 'categories'
     | 'communication'
     | 'retention'
+    | 'call_recordings'
     | 'form_content'
     | 'reported_comments'
     | 'database_setup'
@@ -1495,6 +1497,15 @@ export const AdminPage: React.FC = () => {
           }`}
         >
           8. Chat Retention
+        </button>
+        <button
+          onClick={() => setActiveSection('call_recordings')}
+          className={`px-3 py-2 rounded-xl transition cursor-pointer shadow-2xs flex items-center gap-1.5 ${
+            activeSection === 'call_recordings' ? 'bg-teal-800 text-white shadow-xs' : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
+          }`}
+        >
+          <PhoneCall className="w-3.5 h-3.5" />
+          <span>Call Recordings</span>
         </button>
         <button
           onClick={() => setActiveSection('form_content')}
@@ -3352,6 +3363,11 @@ export const AdminPage: React.FC = () => {
             </button>
           </div>
         </div>
+      )}
+
+      {/* SECTION: CALL RECORDINGS & EVIDENCE (Requirements 10 & 11) */}
+      {activeSection === 'call_recordings' && (
+        <AdminCallRecordingsSection />
       )}
 
       {/* SECTION 8: EDIT FORM CONTENT */}

@@ -128,10 +128,34 @@ export class ProfileService {
             sanitizedMobile = '';
           }
 
+          let isInternetCallEnabled = true;
+          if (data.is_internet_call_enabled !== undefined && data.is_internet_call_enabled !== null) {
+            isInternetCallEnabled = Boolean(data.is_internet_call_enabled);
+          } else {
+            const stored = safeStorage.getItem(`kaammitra_internet_calling_${userId}`);
+            if (stored !== null) isInternetCallEnabled = stored === 'true';
+            else if (sessUserMetadata?.is_internet_call_enabled !== undefined) {
+              isInternetCallEnabled = Boolean(sessUserMetadata.is_internet_call_enabled);
+            }
+          }
+
+          let personalCallRecordingEnabled = true;
+          if (data.personal_call_recording_enabled !== undefined && data.personal_call_recording_enabled !== null) {
+            personalCallRecordingEnabled = Boolean(data.personal_call_recording_enabled);
+          } else {
+            const storedRec = safeStorage.getItem(`kaammitra_personal_recording_${userId}`);
+            if (storedRec !== null) personalCallRecordingEnabled = storedRec === 'true';
+            else if (sessUserMetadata?.personal_call_recording_enabled !== undefined) {
+              personalCallRecordingEnabled = Boolean(sessUserMetadata.personal_call_recording_enabled);
+            }
+          }
+
           const sanitized: UserProfile = {
             ...data,
             mobile: sanitizedMobile,
             is_mobile_public: isMobilePublic,
+            is_internet_call_enabled: isInternetCallEnabled,
+            personal_call_recording_enabled: personalCallRecordingEnabled,
           };
 
           safeStorage.setItem(`kaammitra_profile_${userId}`, JSON.stringify(sanitized));
@@ -167,13 +191,29 @@ export class ProfileService {
 
   static async updateProfile(
     userId: string,
-    updates: Partial<Pick<UserProfile, 'name' | 'mobile' | 'address' | 'profile_photo' | 'is_mobile_public'>>
+    updates: Partial<
+      Pick<
+        UserProfile,
+        | 'name'
+        | 'mobile'
+        | 'address'
+        | 'profile_photo'
+        | 'is_mobile_public'
+        | 'is_internet_call_enabled'
+        | 'personal_call_recording_enabled'
+      >
+    >
   ): Promise<{ success: boolean; data?: UserProfile; error?: string }> {
     try {
       profileCache.delete(userId);
 
-      // Separate is_mobile_public from standard profiles columns to prevent PGRST204 column errors
-      const { is_mobile_public, ...safeUpdates } = updates;
+      // Separate custom/calling preferences from standard profiles columns to prevent schema mismatch errors
+      const {
+        is_mobile_public,
+        is_internet_call_enabled,
+        personal_call_recording_enabled,
+        ...safeUpdates
+      } = updates;
 
       let { data, error } = await supabase
         .from('profiles')
@@ -257,10 +297,42 @@ export class ProfileService {
         } catch {}
       }
 
+      // Feature: Persist is_internet_call_enabled setting
+      if (is_internet_call_enabled !== undefined) {
+        if (typeof window !== 'undefined') {
+          try {
+            safeStorage.setItem(`kaammitra_internet_calling_${userId}`, String(is_internet_call_enabled));
+          } catch {}
+        }
+        try {
+          await supabase.from('profiles').update({ is_internet_call_enabled }).eq('id', userId);
+        } catch {}
+        try {
+          await supabase.auth.updateUser({ data: { is_internet_call_enabled } });
+        } catch {}
+      }
+
+      // Feature: Persist personal_call_recording_enabled setting
+      if (personal_call_recording_enabled !== undefined) {
+        if (typeof window !== 'undefined') {
+          try {
+            safeStorage.setItem(`kaammitra_personal_recording_${userId}`, String(personal_call_recording_enabled));
+          } catch {}
+        }
+        try {
+          await supabase.from('profiles').update({ personal_call_recording_enabled }).eq('id', userId);
+        } catch {}
+        try {
+          await supabase.auth.updateUser({ data: { personal_call_recording_enabled } });
+        } catch {}
+      }
+
       const resultProfile: UserProfile | undefined = data
         ? {
             ...data,
             is_mobile_public: is_mobile_public !== undefined ? is_mobile_public : (data.is_mobile_public !== false),
+            is_internet_call_enabled: is_internet_call_enabled !== undefined ? is_internet_call_enabled : true,
+            personal_call_recording_enabled: personal_call_recording_enabled !== undefined ? personal_call_recording_enabled : true,
           }
         : undefined;
 

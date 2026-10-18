@@ -11,6 +11,7 @@ import { ProfilePhotoViewerModal } from './ProfilePhotoViewerModal';
 import { WorkerQRCodeModal } from './WorkerQRCodeModal';
 import { useShortcutAudio } from '../hooks/useShortcutAudio';
 import { ADMIN_USER_ID } from '../services/chatService';
+import { useCalling } from '../context/CallingContext';
 import verificationLogo from '@/verificationlogo.png';
 
 interface WorkerCardProps {
@@ -48,6 +49,7 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
   const audioUrl = worker.voice_recording?.public_url || null;
   const hasAudio = Boolean(showAudioShortcut && audioUrl);
   const { isPlaying, isLoading, hasError, toggleAudio, preloadAudio } = useShortcutAudio(worker.user_id);
+  const { startCall } = useCalling();
 
   // 1. Worker Name from real profile data
   const profile = worker.profile;
@@ -63,10 +65,26 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
       ? Boolean(profile.is_mobile_public)
       : true;
 
+  // Internet Calling ON/OFF resolution (Requirement 4)
+  const isInternetCallEnabled =
+    worker.is_internet_call_enabled !== undefined
+      ? Boolean(worker.is_internet_call_enabled)
+      : profile?.is_internet_call_enabled !== undefined
+      ? Boolean(profile.is_internet_call_enabled)
+      : true;
+
   // In public-facing worker cards (Home, Search, Map, lists), if mobile is set to private,
   // it must remain hidden for all users (including profile owner). Only admin can view/call.
   const canViewMobile = isMobilePublic || isAdmin;
   const mobile = canViewMobile ? (profile?.mobile?.trim() || '') : '';
+
+  // Matrix:
+  // Mobile OFF + Internet OFF -> show no call button
+  // Mobile ON + Internet OFF -> mobile tel: call
+  // Mobile OFF + Internet ON -> Internet Calling only; do not expose mobile
+  // Both ON -> prioritize Internet Calling; do not expose mobile
+  const showCallButton = Boolean(isMobilePublic && mobile) || isInternetCallEnabled;
+  const isInternetCallAction = isInternetCallEnabled;
 
   // 2. True dynamic auto-fit font sizing calculation based on worker name length:
   // Short name -> noticeably larger, medium -> medium, long -> smaller, very long -> smaller + natural wrap
@@ -260,6 +278,18 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
 
   const handleCallClick = (e: React.MouseEvent) => {
     e.stopPropagation();
+    if (!user) {
+      onRequireAuth();
+      return;
+    }
+
+    // Prioritize Internet Calling if enabled
+    if (isInternetCallAction && profile) {
+      startCall(profile);
+      return;
+    }
+
+    // Otherwise use tel: if mobile is public & available
     if (mobile) {
       window.location.href = `tel:${mobile}`;
     } else {
@@ -579,15 +609,19 @@ export const WorkerCard: React.FC<WorkerCardProps> = ({
                   </button>
                 </div>
 
-                {/* Call Button (Feature 3: Public Mobile Number ON/OFF — Disappears when OFF) */}
-                {Boolean(mobile) && (
+                {/* Call Button (Calling Matrix: Mobile ON/OFF and Internet Calling ON/OFF) */}
+                {showCallButton && (
                   <div className="flex-1">
                     <button
                       type="button"
                       onClick={handleCallClick}
                       style={{ backgroundColor: '#0b6e32' }}
                       className="w-full bg-[#0b6e32] active:scale-[0.98] text-white rounded-xl py-2 sm:py-2.5 px-3 flex items-center justify-center gap-1.5 sm:gap-2 shadow-xs transition cursor-pointer"
-                      title={lang === 'hi' ? 'कॉल करें' : 'Call'}
+                      title={
+                        isInternetCallAction
+                          ? (lang === 'hi' ? 'इंटरनेट कॉल करें' : 'Internet Call')
+                          : (lang === 'hi' ? 'कॉल करें' : 'Call')
+                      }
                     >
                       <Phone className="w-3.5 h-3.5 sm:w-4 sm:h-4 shrink-0 text-emerald-100" />
                       <span className="text-xs sm:text-sm font-semibold text-white">

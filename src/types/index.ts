@@ -25,6 +25,8 @@ export interface UserProfile {
   name: string;
   mobile: string;
   is_mobile_public?: boolean; // Feature 3: Public Mobile Number ON/OFF
+  is_internet_call_enabled?: boolean; // Internet Calling ON/OFF
+  personal_call_recording_enabled?: boolean; // Personal Call Recording ON/OFF
   is_worker_active?: boolean; // Feature 1: Deactivated status indicator for worker account
   is_worker?: boolean;
   address?: string | null;
@@ -53,6 +55,7 @@ export interface WorkerProfile {
   custom_price_unit?: string | null;
   is_active?: boolean; // Feature 1: Admin Service Provider Activate / Deactivate (default true)
   is_mobile_public?: boolean; // Feature 3: Public Mobile Number ON/OFF (default true)
+  is_internet_call_enabled?: boolean; // Internet Calling ON/OFF (default true)
   about_text?: string | null;
   priority_points: number; // 1-100, Admin only
   created_at: string;
@@ -217,6 +220,7 @@ export interface AdminSettings {
   home_welcome_hi: string;
   home_welcome_en: string;
   chat_retention_days: number;
+  call_recording_retention_days?: number; // 1, 10, 15, or 30 days (default 30)
   show_requirements_on_map?: boolean; // Admin only: Show requirements on Map (default false)
   updated_at: string;
 }
@@ -349,3 +353,5 @@ export interface UserNotification {
     is_mobile_public?: boolean;
   } | null;
 }
+
+export * from './calling';

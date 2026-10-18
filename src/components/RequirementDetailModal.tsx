@@ -16,6 +16,7 @@ import { WorkerDetailModal } from './WorkerDetailModal';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
 import verificationLogo from '@/verificationlogo.png';
 import { WorkerService } from '../services/workerService';
+import { useCalling } from '../context/CallingContext';
 
 interface RequirementDetailModalProps {
   requirement?: Requirement | null;
@@ -39,6 +40,7 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
   isOwnRequirement = false,
 }) => {
   const { user, location: userLocation, isAdmin, refreshUser } = useAuth();
+  const { startCall } = useCalling();
   const { lang } = useTranslation();
   const [showPhotoViewer, setShowPhotoViewer] = useState(false);
   const [zoomedPhotoUrl, setZoomedPhotoUrl] = useState<string | null>(null);
@@ -96,8 +98,13 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
   // Mobile Privacy checks
   const isMobilePublic =
     owner?.is_mobile_public !== undefined ? Boolean(owner.is_mobile_public) : true;
+  const isInternetCallEnabled =
+    owner?.is_internet_call_enabled !== undefined ? Boolean(owner.is_internet_call_enabled) : true;
   const canViewMobile = isMobilePublic || isAdmin;
   const mobile = canViewMobile ? (owner?.mobile?.trim() || '') : '';
+
+  const showCallButton = Boolean(isMobilePublic && mobile) || isInternetCallEnabled;
+  const isInternetCallAction = isInternetCallEnabled;
 
   const categoryName = requirement?.category || (lang === 'hi' ? 'सेवा विशेषज्ञ' : 'Service Expert');
   const maxBudget = requirement?.maximum_budget || 0;
@@ -240,6 +247,11 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
   const handleCall = () => {
     if (!user) {
       onRequireAuth();
+      return;
+    }
+    if (isInternetCallAction && owner) {
+      onClose();
+      startCall(owner);
       return;
     }
     if (!mobile) return;
@@ -528,13 +540,17 @@ export const RequirementDetailModal: React.FC<RequirementDetailModalProps> = ({
                 </button>
               </div>
 
-              {Boolean(mobile) && (
+              {showCallButton && (
                 <div className="flex-1 bg-[#364f6b]/70 rounded-xl p-[2px] shadow-xs">
                   <button
                     type="button"
                     onClick={handleCall}
                     className="w-full bg-gradient-to-b from-[#2d4a70] to-[#1a2e48] rounded-[10px] py-2.5 px-3 flex items-center justify-center gap-2 shadow-[inset_0_2px_4px_rgba(255,255,255,0.2),inset_0_-2px_4px_rgba(0,0,0,0.3)] hover:brightness-110 active:scale-[0.98] transition cursor-pointer"
-                    title={lang === 'hi' ? 'कॉल करें' : 'Call'}
+                    title={
+                      isInternetCallAction
+                        ? (lang === 'hi' ? 'इंटरनेट कॉल करें' : 'Internet Call')
+                        : (lang === 'hi' ? 'कॉल करें' : 'Call')
+                    }
                   >
                     <Phone className="w-4 h-4 text-[#f1f5f9] shrink-0" />
                     <span className="text-xs sm:text-sm font-semibold text-[#f1f5f9]">

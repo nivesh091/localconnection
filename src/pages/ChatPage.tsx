@@ -21,7 +21,16 @@ import {
   ChevronDown,
   Wifi,
   WifiOff,
+  PhoneIncoming,
+  PhoneOutgoing,
+  PhoneMissed,
+  Play,
+  Pause,
+  Disc,
 } from 'lucide-react';
+import { useCalling } from '../context/CallingContext';
+import { CallingService } from '../services/callingService';
+import { CallRecord, CallRecording } from '../types/calling';
 import { Message, MessageType, UserProfile, WorkerProfile, UserLocation, CommentReference } from '../types';
 import { ChatService, ADMIN_USER_ID } from '../services/chatService';
 import { ProfileService } from '../services/profileService';
@@ -311,6 +320,14 @@ export const ChatPage: React.FC<ChatPageProps> = ({
   const [showReconnectedBanner, setShowReconnectedBanner] = useState(false);
   const isSyncingPendingRef = useRef(false);
 
+  // Internet Calling Integration (Requirement 5 & 12)
+  const { startCall } = useCalling();
+  const [callHistory, setCallHistory] = useState<CallRecord[]>([]);
+  const [personalRecordingsMap, setPersonalRecordingsMap] = useState<Record<string, CallRecording>>({});
+  const [playingCallRecId, setPlayingCallRecId] = useState<string | null>(null);
+  const [callRecSignedUrls, setCallRecSignedUrls] = useState<Record<string, string>>({});
+  const callRecAudioRefs = useRef<Record<string, HTMLAudioElement>>({});
+
   // Monitor network online/offline state
   useEffect(() => {
     const handleOnline = () => {
@@ -329,6 +346,63 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       window.removeEventListener('offline', handleOffline);
     };
   }, []);
+
+  // Fetch call history and private recordings for this conversation (Requirement 12)
+  useEffect(() => {
+    if (!user?.id || !otherUserId) return;
+    const fetchCalls = async () => {
+      try {
+        const calls = await CallingService.getCallHistory({
+          userId1: user.id,
+          userId2: otherUserId,
+          conversationId,
+        });
+        setCallHistory(calls);
+
+        const recs = await CallingService.getPersonalRecordings(user.id);
+        const map: Record<string, CallRecording> = {};
+        recs.forEach((r) => {
+          map[r.call_id] = r;
+        });
+        setPersonalRecordingsMap(map);
+      } catch (err) {
+        console.warn('Call history fetch error:', err);
+      }
+    };
+    fetchCalls();
+  }, [user?.id, otherUserId, conversationId]);
+
+  const handleTogglePlayCallRec = async (rec: CallRecording) => {
+    if (playingCallRecId === rec.id) {
+      const audio = callRecAudioRefs.current[rec.id];
+      if (audio) audio.pause();
+      setPlayingCallRecId(null);
+      return;
+    }
+
+    if (playingCallRecId && callRecAudioRefs.current[playingCallRecId]) {
+      callRecAudioRefs.current[playingCallRecId].pause();
+    }
+
+    let url = callRecSignedUrls[rec.id];
+    if (!url) {
+      const signed = await CallingService.getRecordingSignedUrl(rec.storage_path, 300);
+      if (!signed) return;
+      url = signed;
+      setCallRecSignedUrls((prev) => ({ ...prev, [rec.id]: url }));
+    }
+
+    let audio = callRecAudioRefs.current[rec.id];
+    if (!audio) {
+      audio = new Audio(url);
+      callRecAudioRefs.current[rec.id] = audio;
+      audio.onended = () => {
+        setPlayingCallRecId(null);
+      };
+    }
+    audio.play().catch(() => {});
+    setPlayingCallRecId(rec.id);
+  };
 
   // Active temporary WhatsApp-style comment reference in composer
   const [activeCommentRef, setActiveCommentRef] = useState<CommentReference | null>(
@@ -1337,7 +1411,19 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       : otherUser?.is_mobile_public !== undefined
       ? Boolean(otherUser.is_mobile_public)
       : true;
-  const canCallOther = Boolean(otherUser?.mobile) && (isOtherMobilePublic || isAdmin);
+
+  const isOtherInternetCallEnabled =
+    otherWorker?.is_internet_call_enabled !== undefined
+      ? Boolean(otherWorker.is_internet_call_enabled)
+      : otherUser?.is_internet_call_enabled !== undefined
+      ? Boolean(otherUser.is_internet_call_enabled)
+      : true;
+
+  // Matrix: Prioritizes Internet Calling; does not expose mobile number when Internet Calling is used
+  const showHeaderCallButton =
+    (Boolean(otherUser?.mobile) && (isOtherMobilePublic || isAdmin)) ||
+    isOtherInternetCallEnabled;
+  const isInternetCallAction = isOtherInternetCallEnabled;
 
   return (
     <div
@@ -1466,17 +1552,25 @@ export const ChatPage: React.FC<ChatPageProps> = ({
               <Search className="w-4 h-4" />
             </button>
 
-            {/* Call button using public worker/user mobile */}
-            {canCallOther && (
+            {/* Call button using Calling Matrix */}
+            {showHeaderCallButton && (
               <button
                 type="button"
                 onClick={() => {
+                  if (isInternetCallAction && otherUser) {
+                    startCall(otherUser, conversationId);
+                    return;
+                  }
                   if (otherUser?.mobile) {
                     window.location.href = `tel:${otherUser.mobile}`;
                   }
                 }}
                 className="p-2 text-teal-700 hover:bg-teal-50 rounded-full transition shrink-0 cursor-pointer"
-                title="कॉल करें"
+                title={
+                  isInternetCallAction
+                    ? (lang === 'hi' ? 'इंटरनेट कॉल करें' : 'Internet Call')
+                    : (lang === 'hi' ? 'कॉल करें' : 'Call')
+                }
               >
                 <Phone className="w-4 h-4" />
               </button>
@@ -1590,15 +1684,93 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       >
         {isLoading ? (
           <div className="py-12 text-center text-xs text-slate-400">{t.loading}</div>
-        ) : messages.length === 0 ? (
-          <div className="py-12 text-center text-xs text-slate-400 space-y-1">
-            <p>बातचीत की शुरुआत करें।</p>
-            <p className="text-[10px] text-slate-400">
-              मैसेज, फ़ोटो या अपनी आवाज में संदेश भेजें।
-            </p>
-          </div>
         ) : (
-          messages.map((msg) => {
+          <>
+            {/* Call History Events in Chat (Requirement 12) */}
+            {callHistory.length > 0 && (
+              <div className="space-y-2 py-1">
+                {callHistory.map((call) => {
+                  const isOutgoing = call.caller_id === user?.id;
+                  const isMissed = call.status === 'missed';
+                  const personalRec = personalRecordingsMap[call.id];
+                  const isPlayingRec = personalRec && playingCallRecId === personalRec.id;
+
+                  return (
+                    <div key={call.id} className="flex justify-center my-1.5">
+                      <div className="bg-white/95 border border-slate-200/90 rounded-2xl px-3.5 py-2 max-w-xs w-full shadow-2xs space-y-1.5 text-center">
+                        <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-slate-800">
+                          {isMissed ? (
+                            <>
+                              <PhoneMissed className="w-3.5 h-3.5 text-rose-600" />
+                              <span className="text-rose-700">मिस्ड इंटरनेट कॉल</span>
+                            </>
+                          ) : isOutgoing ? (
+                            <>
+                              <PhoneOutgoing className="w-3.5 h-3.5 text-teal-700" />
+                              <span>आउटगोइंग इंटरनेट कॉल</span>
+                            </>
+                          ) : (
+                            <>
+                              <PhoneIncoming className="w-3.5 h-3.5 text-emerald-600" />
+                              <span>इनकमिंग इंटरनेट कॉल</span>
+                            </>
+                          )}
+                        </div>
+
+                        <div className="flex items-center justify-center gap-2 text-[10px] text-slate-500">
+                          <span>
+                            {new Date(call.started_at).toLocaleTimeString('hi-IN', {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                          </span>
+                          {call.duration_seconds > 0 && (
+                            <>
+                              <span>•</span>
+                              <span>
+                                {Math.floor(call.duration_seconds / 60)}m {call.duration_seconds % 60}s
+                              </span>
+                            </>
+                          )}
+                        </div>
+
+                        {/* Private personal call recording playback (Only visible to owner) */}
+                        {personalRec && !personalRec.is_deleted_by_user && (
+                          <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-2">
+                            <button
+                              type="button"
+                              onClick={() => handleTogglePlayCallRec(personalRec)}
+                              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 text-[11px] font-bold transition cursor-pointer"
+                            >
+                              {isPlayingRec ? (
+                                <Pause className="w-3 h-3 text-teal-700" />
+                              ) : (
+                                <Play className="w-3 h-3 text-teal-700 ml-0.5" />
+                              )}
+                              <span>{isPlayingRec ? 'रोकें' : 'रिकॉर्डिंग सुनें'}</span>
+                            </button>
+                            <span className="text-[10px] text-teal-700 flex items-center gap-1">
+                              <Disc className="w-3 h-3" />
+                              <span>व्यक्तिगत</span>
+                            </span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {messages.length === 0 && callHistory.length === 0 ? (
+              <div className="py-12 text-center text-xs text-slate-400 space-y-1">
+                <p>बातचीत की शुरुआत करें।</p>
+                <p className="text-[10px] text-slate-400">
+                  मैसेज, फ़ोटो या अपनी आवाज में संदेश भेजें।
+                </p>
+              </div>
+            ) : (
+              messages.map((msg) => {
             const isMine = msg.is_mine;
             const isDeleted = msg.deleted_for_everyone;
             const isSelectedForAction = actionMessage?.id === msg.id;
@@ -1818,6 +1990,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
               </div>
             );
           })
+        )}
+          </>
         )}
         <div ref={messagesEndRef} />
       </div>

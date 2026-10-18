@@ -70,6 +70,7 @@ export class AdminService {
             home_welcome_hi: `${currentNameHi} आपका स्वागत करता है`,
             home_welcome_en: `Welcome to ${currentNameEn}`,
             chat_retention_days: 30,
+            call_recording_retention_days: 30,
             show_requirements_on_map: localReqMapOverride,
             updated_at: new Date().toISOString(),
           };
@@ -120,6 +121,7 @@ export class AdminService {
           home_welcome_en: resolvedWelcomeEn,
           about_kaammitra_hi: resolvedAboutHi || data.about_kaammitra_hi,
           about_kaammitra_en: resolvedAboutEn || data.about_kaammitra_en,
+          call_recording_retention_days: data.call_recording_retention_days || 30,
           show_requirements_on_map: resolvedShowReqsOnMap,
         };
 
