@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { ShieldCheck, X, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
+import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
 
 interface RecordingGuidelinesModalProps {
   isOpen: boolean;
@@ -14,6 +15,7 @@ export const RecordingGuidelinesModal: React.FC<RecordingGuidelinesModalProps> =
   lang: initialLang = 'hi',
 }) => {
   const [lang, setLang] = useState<'hi' | 'en'>(initialLang);
+  const { websiteName } = useWebsiteBranding();
 
   usePopupBackDismiss(isOpen, onClose);
 
@@ -104,7 +106,7 @@ export const RecordingGuidelinesModal: React.FC<RecordingGuidelinesModalProps> =
                   3. नागरिक व्यवहार व अनुचित भाषा पर प्रतिबंध
                 </h4>
                 <p>
-                  काममित्र पर सभी उपयोगकर्ताओं (उपभोक्ता एवं कामगार) से शिष्ट व मर्यादित व्यवहार की अपेक्षा की जाती है। कॉल के दौरान गाली-गलौज, धमकी, अश्लीलता, नस्लीय/धार्मिक टिप्पणी या अनुचित आचरण सख्त वर्जित है। विवाद या शिकायत की स्थिति में प्रशासनिक रिकॉर्डिंग की समीक्षा कर दोषी खाते को तत्काल निलंबित किया जा सकता है।
+                  {websiteName} पर सभी उपयोगकर्ताओं (उपभोक्ता एवं कामगार) से शिष्ट व मर्यादित व्यवहार की अपेक्षा की जाती है। कॉल के दौरान गाली-गलौज, धमकी, अश्लीलता, नस्लीय/धार्मिक टिप्पणी या अनुचित आचरण सख्त वर्जित है। विवाद या शिकायत की स्थिति में प्रशासनिक रिकॉर्डिंग की समीक्षा कर दोषी खाते को तत्काल निलंबित किया जा सकता है।
                 </p>
               </div>
 

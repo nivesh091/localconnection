@@ -23,6 +23,8 @@ import {
   HelpCircle,
   RefreshCw,
   X,
+  ChevronDown,
+  Maximize2,
 } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { supabase } from '../lib/supabase';
@@ -38,6 +40,9 @@ import {
 } from '../types/calling';
 import { UserProfile } from '../types';
 import { RecordingGuidelinesModal } from '../components/RecordingGuidelinesModal';
+import { brandingStore } from '../services/brandingService';
+import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
+import { NotificationService } from '../services/notificationService';
 
 interface CallingContextType {
   activeCall: CallRecord | null;
@@ -78,6 +83,62 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [showConnectingRefreshToast, setShowConnectingRefreshToast] = useState(false);
   const [adminTerminationNotice, setAdminTerminationNotice] = useState<string | null>(null);
 
+  // Call minimization state (Issue 3: allow leaving full-screen interface without ending call)
+  const [isCallMinimized, setIsCallMinimized] = useState(false);
+  const isSpeakerRef = useRef<boolean>(false);
+  isSpeakerRef.current = isSpeaker;
+  const isMutedRef = useRef<boolean>(false);
+  isMutedRef.current = isMuted;
+
+  // Dynamic administrator-configured application name (Issue 1)
+  const [websiteName, setWebsiteName] = useState(() => brandingStore.getName('hi'));
+
+  useEffect(() => {
+    return brandingStore.subscribe(() => {
+      setWebsiteName(brandingStore.getName('hi'));
+    });
+  }, []);
+
+  // Minimize call overlay on browser/phone back button press (Issue 3)
+  usePopupBackDismiss(
+    !isCallMinimized && (callState === 'calling' || callState === 'connecting' || callState === 'connected'),
+    () => setIsCallMinimized(true)
+  );
+
+  // Listen for navigation messages from Service Worker or internal events to maximize call
+  useEffect(() => {
+    const handleOpenCall = () => {
+      setIsCallMinimized(false);
+    };
+    window.addEventListener('km_open_call', handleOpenCall);
+
+    const handleHash = () => {
+      if (typeof window !== 'undefined' && window.location.hash.startsWith('#call=')) {
+        setIsCallMinimized(false);
+      }
+    };
+    window.addEventListener('hashchange', handleHash);
+    handleHash();
+
+    if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+      const handleSwMsg = (event: MessageEvent) => {
+        if (event.data?.type === 'NAVIGATE_CALL') {
+          setIsCallMinimized(false);
+        }
+      };
+      navigator.serviceWorker.addEventListener('message', handleSwMsg);
+      return () => {
+        window.removeEventListener('km_open_call', handleOpenCall);
+        window.removeEventListener('hashchange', handleHash);
+        navigator.serviceWorker.removeEventListener('message', handleSwMsg);
+      };
+    }
+    return () => {
+      window.removeEventListener('km_open_call', handleOpenCall);
+      window.removeEventListener('hashchange', handleHash);
+    };
+  }, []);
+
   // Guidelines modal
   const [showGuidelines, setShowGuidelines] = useState(false);
 
@@ -114,6 +175,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const connectingTimerRef = useRef<any>(null);
   const roomChannelRef = useRef<any>(null);
   const callTableChannelRef = useRef<any>(null);
+  const incomingCallWatchChannelRef = useRef<any>(null);
+  const handleIncomingCallCancelledRef = useRef<(callId: string, status?: string, reason?: string) => void>(() => {});
   const isInitiatorRef = useRef<boolean>(false);
 
   const isCallSupported =
@@ -137,6 +200,10 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   useEffect(() => {
     return () => {
       ringtoneService.stopAll();
+      if (incomingCallWatchChannelRef.current) {
+        supabase.removeChannel(incomingCallWatchChannelRef.current);
+        incomingCallWatchChannelRef.current = null;
+      }
     };
   }, []);
 
@@ -146,60 +213,157 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     console.log('[WebRTC-Call] Initializing persistent incoming call listener for user:', user.id);
 
-    const unsubscribe = CallingService.subscribeToIncomingCalls(user.id, async (incomingCall) => {
-      console.log('[WebRTC-Call] Incoming call event received:', incomingCall.id, 'from:', incomingCall.caller_id);
+    const unsubscribe = CallingService.subscribeToIncomingCalls(
+      user.id,
+      async (incomingCall) => {
+        console.log('[WebRTC-Call] Incoming call event received:', incomingCall.id, 'from:', incomingCall.caller_id);
 
-      // Check if call was already handled, answered, or terminated (prevent duplicate broadcast/postgres_changes replay)
-      if (
-        handledCallIdsRef.current.has(incomingCall.id) ||
-        terminatedCallIdsRef.current.has(incomingCall.id)
-      ) {
-        console.log('[WebRTC-Call] Duplicate or terminated incoming call event ignored:', incomingCall.id);
-        return;
-      }
-
-      // Check if Admin has disabled Internet Calling globally (fail-safe)
-      const callingSettings = await AdminService.getCallingSettings().catch(() => ({
-        mobile_calling_enabled: false,
-        internet_calling_enabled: false,
-      }));
-      if (!callingSettings.internet_calling_enabled) {
-        console.warn('[WebRTC-Call] Rejecting incoming call because internet calling is disabled by admin:', incomingCall.id);
-        CallingService.rejectCall(incomingCall.id);
-        return;
-      }
-
-      // If already in an active call, ignore or decline duplicate
-      if (
-        activeCallRef.current &&
-        callStateRef.current !== 'idle' &&
-        callStateRef.current !== 'ended'
-      ) {
-        if (activeCallRef.current.id !== incomingCall.id) {
-          console.warn('[WebRTC-Call] User busy. Rejecting parallel incoming call:', incomingCall.id);
-          CallingService.rejectCall(incomingCall.id);
+        // Check if call was already handled, answered, or terminated (prevent duplicate broadcast/postgres_changes replay)
+        if (
+          handledCallIdsRef.current.has(incomingCall.id) ||
+          terminatedCallIdsRef.current.has(incomingCall.id)
+        ) {
+          console.log('[WebRTC-Call] Duplicate or terminated incoming call event ignored:', incomingCall.id);
+          ringtoneService.stopIncomingRingtone();
+          return;
         }
-        return;
+
+        // Verify call is still active in database (not already cancelled by caller during transmission)
+        try {
+          const { data: latestDbCall } = await supabase
+            .from('calls')
+            .select('status, ended_reason')
+            .eq('id', incomingCall.id)
+            .maybeSingle();
+
+          if (
+            latestDbCall &&
+            (latestDbCall.status === 'ended' ||
+              latestDbCall.status === 'rejected' ||
+              latestDbCall.status === 'missed')
+          ) {
+            console.log('[WebRTC-Call] Incoming call was already terminated on server before arrival:', incomingCall.id);
+            terminatedCallIdsRef.current.add(incomingCall.id);
+            handledCallIdsRef.current.add(incomingCall.id);
+            ringtoneService.stopIncomingRingtone();
+            ringtoneService.stopAll();
+            return;
+          }
+        } catch {}
+
+        // Check if Admin has disabled Internet Calling globally (fail-safe)
+        const callingSettings = await AdminService.getCallingSettings().catch(() => ({
+          mobile_calling_enabled: false,
+          internet_calling_enabled: false,
+        }));
+        if (!callingSettings.internet_calling_enabled) {
+          console.warn('[WebRTC-Call] Rejecting incoming call because internet calling is disabled by admin:', incomingCall.id);
+          CallingService.rejectCall(incomingCall.id);
+          return;
+        }
+
+        // If already in an active call, ignore or decline duplicate
+        if (
+          activeCallRef.current &&
+          callStateRef.current !== 'idle' &&
+          callStateRef.current !== 'ended'
+        ) {
+          if (activeCallRef.current.id !== incomingCall.id) {
+            console.warn('[WebRTC-Call] User busy. Rejecting parallel incoming call:', incomingCall.id);
+            CallingService.rejectCall(incomingCall.id);
+          }
+          return;
+        }
+
+        handledCallIdsRef.current.add(incomingCall.id);
+        setActiveCall(incomingCall);
+        setOtherParticipant(incomingCall.caller || null);
+        setCallState('ringing');
+        setIsCallMinimized(false);
+        isInitiatorRef.current = false;
+        isConnectedRef.current = false;
+        ringtoneService.startIncomingRingtone();
+
+        // Dedicated realtime watch on this incoming call for immediate caller-cancellation detection
+        if (incomingCallWatchChannelRef.current) {
+          supabase.removeChannel(incomingCallWatchChannelRef.current);
+          incomingCallWatchChannelRef.current = null;
+        }
+
+        try {
+          const watchChannel = supabase
+            .channel(`call_watch_${incomingCall.id}`)
+            .on(
+              'postgres_changes',
+              {
+                event: 'UPDATE',
+                schema: 'public',
+                table: 'calls',
+                filter: `id=eq.${incomingCall.id}`,
+              },
+              (payload) => {
+                const updated = payload.new as CallRecord;
+                if (
+                  updated &&
+                  (updated.status === 'ended' ||
+                    updated.status === 'rejected' ||
+                    updated.status === 'missed')
+                ) {
+                  handleIncomingCallCancelledRef.current(
+                    incomingCall.id,
+                    updated.status,
+                    updated.ended_reason || (updated as any).end_reason || 'caller_ended'
+                  );
+                }
+              }
+            )
+            .on('broadcast', { event: 'signal' }, ({ payload }) => {
+              if (payload?.type === 'ended' || payload?.type === 'end' || payload?.type === 'rejected') {
+                handleIncomingCallCancelledRef.current(
+                  incomingCall.id,
+                  'ended',
+                  payload?.payload?.reason || 'caller_ended'
+                );
+              }
+            })
+            .subscribe();
+
+          incomingCallWatchChannelRef.current = watchChannel;
+        } catch {}
+
+        // Show notification if app is hidden or backgrounded
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+          const callerName = incomingCall.caller?.name || 'उपयोगकर्ता';
+          const currentBrand = brandingStore.getName('hi');
+          NotificationService.showNotification(`${callerName} — ${currentBrand}`, {
+            body: 'इनकमिंग इंटरनेट कॉल... (Incoming Call)',
+            tag: `call_${incomingCall.id}`,
+            data: {
+              url: `/#call=${encodeURIComponent(incomingCall.id)}`,
+              callId: incomingCall.id,
+              type: 'incoming_call',
+            },
+          }).catch(() => {});
+        }
+
+        // Auto-timeout after 45s if receiver doesn't answer
+        if (timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
+        timeoutTimerRef.current = setTimeout(() => {
+          console.log('[WebRTC-Call] Incoming call unanswered timeout (45s)');
+          handleTimeout(incomingCall.id);
+        }, 45000);
+      },
+      (callId, status, reason) => {
+        handleIncomingCallCancelledRef.current(callId, status, reason);
       }
-
-      handledCallIdsRef.current.add(incomingCall.id);
-      setActiveCall(incomingCall);
-      setOtherParticipant(incomingCall.caller || null);
-      setCallState('ringing');
-      isInitiatorRef.current = false;
-      isConnectedRef.current = false;
-      ringtoneService.startIncomingRingtone();
-
-      // Auto-timeout after 45s if receiver doesn't answer
-      if (timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
-      timeoutTimerRef.current = setTimeout(() => {
-        console.log('[WebRTC-Call] Incoming call unanswered timeout (45s)');
-        handleTimeout(incomingCall.id);
-      }, 45000);
-    });
+    );
 
     return () => {
       ringtoneService.stopAll();
+      if (incomingCallWatchChannelRef.current) {
+        supabase.removeChannel(incomingCallWatchChannelRef.current);
+        incomingCallWatchChannelRef.current = null;
+      }
       unsubscribe();
     };
   }, [user?.id]);
@@ -259,8 +423,15 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     terminatedCallIdsRef.current.add(callId);
     if (terminatingCallIdRef.current === callId) return;
     terminatingCallIdRef.current = callId;
+    ringtoneService.stopIncomingRingtone();
     ringtoneService.stopAll();
     ringtoneService.playStatusBeep('ended');
+
+    if (incomingCallWatchChannelRef.current) {
+      supabase.removeChannel(incomingCallWatchChannelRef.current);
+      incomingCallWatchChannelRef.current = null;
+    }
+
     await CallingService.endCall({
       callId,
       reason: 'timeout_unanswered',
@@ -270,6 +441,167 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     setCallState('idle');
     setActiveCall(null);
   };
+
+  // Robust Audio Output Router: handles normal mode (earpiece) vs speakerphone (hands-free)
+  const applyAudioOutputRouting = useCallback(async (speaker: boolean) => {
+    const el = audioElementRef.current as any;
+    if (!el) return;
+
+    // 1. Audio Session API (W3C VoIP mode for mobile browsers)
+    if (typeof navigator !== 'undefined' && 'audioSession' in navigator && (navigator as any).audioSession) {
+      try {
+        (navigator as any).audioSession.type = 'play-and-record';
+      } catch {}
+    }
+
+    // 2. setSinkId device selection if supported by browser/platform
+    if (typeof el.setSinkId === 'function' && typeof navigator !== 'undefined' && navigator.mediaDevices?.enumerateDevices) {
+      try {
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const audioOutputs = devices.filter((d) => d.kind === 'audiooutput');
+
+        if (speaker) {
+          const speakerDevice = audioOutputs.find(
+            (d) =>
+              d.deviceId !== 'default' &&
+              (d.label.toLowerCase().includes('speaker') ||
+                d.label.toLowerCase().includes('loudspeaker') ||
+                d.label.toLowerCase().includes('hands-free'))
+          );
+          if (speakerDevice?.deviceId) {
+            await el.setSinkId(speakerDevice.deviceId);
+          } else {
+            await el.setSinkId('');
+          }
+        } else {
+          // Normal mode: search for earpiece / internal receiver
+          const earpieceDevice = audioOutputs.find(
+            (d) =>
+              d.label.toLowerCase().includes('earpiece') ||
+              d.label.toLowerCase().includes('receiver') ||
+              d.label.toLowerCase().includes('phone') ||
+              d.label.toLowerCase().includes('internal')
+          );
+          if (earpieceDevice?.deviceId) {
+            await el.setSinkId(earpieceDevice.deviceId);
+          } else {
+            await el.setSinkId('');
+          }
+        }
+      } catch (sinkErr) {
+        console.warn('[WebRTC-Call] Audio output routing notice:', sinkErr);
+      }
+    }
+
+    // 3. Volume scaling: speakerphone gets 1.0; normal earpiece mode gets 0.65 to prevent loud speaker blast
+    el.volume = speaker ? 1.0 : 0.65;
+  }, []);
+
+  // Re-evaluate audio device routing if devices change (e.g. bluetooth or headphones plugged/unplugged)
+  useEffect(() => {
+    if (typeof navigator !== 'undefined' && navigator.mediaDevices?.addEventListener) {
+      const handleDeviceChange = () => {
+        if (callStateRef.current === 'connected') {
+          applyAudioOutputRouting(isSpeakerRef.current);
+        }
+      };
+      navigator.mediaDevices.addEventListener('devicechange', handleDeviceChange);
+      return () => {
+        navigator.mediaDevices.removeEventListener('devicechange', handleDeviceChange);
+      };
+    }
+  }, [applyAudioOutputRouting]);
+
+  // MediaSession API and Screen-off Lifecycle Handler (Issue 2)
+  useEffect(() => {
+    if (callState === 'connected' && otherParticipant) {
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.playbackState = 'playing';
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: otherParticipant.name,
+            artist: websiteName,
+            album: `${websiteName} Voice Call`,
+          });
+          try {
+            (navigator.mediaSession as any).setActionHandler('hangup' as any, () => {
+              endCall();
+            });
+            (navigator.mediaSession as any).setActionHandler('stop' as any, () => {
+              endCall();
+            });
+          } catch {}
+          try {
+            navigator.mediaSession.setActionHandler('play', () => {
+              if (audioElementRef.current?.paused) {
+                audioElementRef.current.play().catch(() => {});
+              }
+            });
+            navigator.mediaSession.setActionHandler('pause', () => {
+              // Prevent background OS audio pause from silencing call
+              if (audioElementRef.current?.paused) {
+                audioElementRef.current.play().catch(() => {});
+              }
+            });
+          } catch {}
+        } catch {}
+      }
+    } else if (callState === 'idle' || callState === 'ended') {
+      if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+        try {
+          navigator.mediaSession.playbackState = 'none';
+        } catch {}
+      }
+    }
+  }, [callState, otherParticipant?.name, websiteName]);
+
+  // Keep Call Audio Transmitting & Receiving when Mobile Screen Turns Off or Tab Backgrounds (Issue 2)
+  useEffect(() => {
+    const handleLifecycle = () => {
+      if (callStateRef.current === 'connected') {
+        // 1. Verify and keep local mic tracks active (strictly respect user's intentional mute state)
+        if (localStreamRef.current) {
+          localStreamRef.current.getAudioTracks().forEach((track) => {
+            if (!isMutedRef.current && !track.enabled) {
+              track.enabled = true;
+            }
+          });
+        }
+        // 2. Verify remote audio element is playing
+        if (audioElementRef.current && remoteStreamRef.current) {
+          if (audioElementRef.current.paused) {
+            audioElementRef.current.play().catch(() => {});
+          }
+        }
+        // 3. Resume AudioContext in recorder if suspended
+        if (recorderRef.current) {
+          recorderRef.current.resumeAudioContext();
+        }
+      }
+    };
+
+    const audioEl = audioElementRef.current;
+    const handleAudioPause = () => {
+      // If browser attempts to pause audio element when screen is locked/off during connected call
+      if (callStateRef.current === 'connected' && audioElementRef.current?.paused) {
+        audioElementRef.current.play().catch(() => {});
+      }
+    };
+
+    if (audioEl) {
+      audioEl.addEventListener('pause', handleAudioPause);
+    }
+
+    document.addEventListener('visibilitychange', handleLifecycle);
+    window.addEventListener('pageshow', handleLifecycle);
+    return () => {
+      if (audioEl) {
+        audioEl.removeEventListener('pause', handleAudioPause);
+      }
+      document.removeEventListener('visibilitychange', handleLifecycle);
+      window.removeEventListener('pageshow', handleLifecycle);
+    };
+  }, []);
 
   // Cleanup helper
   const cleanupCall = useCallback(() => {
@@ -317,6 +649,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       callTableChannelRef.current = null;
     }
 
+    if (incomingCallWatchChannelRef.current) {
+      supabase.removeChannel(incomingCallWatchChannelRef.current);
+      incomingCallWatchChannelRef.current = null;
+    }
+
     if (audioElementRef.current) {
       audioElementRef.current.srcObject = null;
     }
@@ -328,7 +665,16 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     terminatingCallIdRef.current = null;
     setShowConnectingRefreshToast(false);
     setIsMuted(false);
+    isMutedRef.current = false;
     setIsSpeaker(false);
+    isSpeakerRef.current = false;
+    setIsCallMinimized(false);
+
+    if (typeof navigator !== 'undefined' && 'mediaSession' in navigator) {
+      try {
+        navigator.mediaSession.playbackState = 'none';
+      } catch {}
+    }
 
     if (reconnectionTimeoutRef.current) {
       clearTimeout(reconnectionTimeoutRef.current);
@@ -611,8 +957,9 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         if (audioEl) {
           console.log('[WebRTC-Call] Attaching remoteStream to audio element');
           audioEl.srcObject = remoteStream;
-          audioEl.volume = 1.0;
           audioEl.muted = false;
+          // Apply initial audio routing (defaults to earpiece mode unless speaker was toggled)
+          applyAudioOutputRouting(isSpeakerRef.current).catch(() => {});
 
           const playPromise = audioEl.play();
           if (playPromise !== undefined) {
@@ -720,6 +1067,68 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     },
     [user?.id, handleConnectionEstablished]
   );
+
+  // Handle unanswered incoming call cancelled by the caller or terminated before answer
+  const handleIncomingCallCancelled = useCallback(
+    (callId: string, _status?: string, reason?: string) => {
+      // 1. Mark as terminated immediately so no delayed callbacks or reconnection can restart ringtone
+      terminatedCallIdsRef.current.add(callId);
+      handledCallIdsRef.current.add(callId);
+
+      // 2. Unconditionally stop incoming ringtone and vibration immediately
+      ringtoneService.stopIncomingRingtone();
+      ringtoneService.stopAll();
+
+      const currentCall = activeCallRef.current || activeCall;
+      if (!currentCall || currentCall.id !== callId) {
+        return;
+      }
+
+      if (terminatingCallIdRef.current === callId) {
+        return;
+      }
+      terminatingCallIdRef.current = callId;
+
+      console.log('[WebRTC-Call] Unanswered incoming call cancelled by caller:', callId, reason);
+
+      // 3. Clear timeout timer and watch channel
+      if (timeoutTimerRef.current) {
+        clearTimeout(timeoutTimerRef.current);
+        timeoutTimerRef.current = null;
+      }
+      if (incomingCallWatchChannelRef.current) {
+        supabase.removeChannel(incomingCallWatchChannelRef.current);
+        incomingCallWatchChannelRef.current = null;
+      }
+
+      // 4. Dismiss notification
+      NotificationService.dismissCallNotification(callId, user?.id);
+
+      // 5. Play short ended status beep
+      ringtoneService.playStatusBeep('ended');
+
+      // 6. Set UI to ended
+      setCallState('ended');
+      setErrorMessage(
+        reason === 'caller_ended'
+          ? 'कॉलर ने कॉल रद्द कर दी (Caller Cancelled)'
+          : 'कॉल समाप्त हो गई (Call Ended)'
+      );
+
+      // 7. Cleanup and return to idle
+      setTimeout(() => {
+        cleanupCall();
+        setCallState('idle');
+        setActiveCall(null);
+        setOtherParticipant(null);
+        setErrorMessage(null);
+        terminatingCallIdRef.current = null;
+      }, 1200);
+    },
+    [activeCall, cleanupCall, user?.id]
+  );
+
+  handleIncomingCallCancelledRef.current = handleIncomingCallCancelled;
 
   // Peer-initiated hangup (Idempotent local teardown without triggering recursive signal loop)
   const handlePeerHangup = useCallback(
@@ -1169,6 +1578,12 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       timeoutTimerRef.current = null;
     }
 
+    if (incomingCallWatchChannelRef.current) {
+      supabase.removeChannel(incomingCallWatchChannelRef.current);
+      incomingCallWatchChannelRef.current = null;
+    }
+
+    ringtoneService.stopIncomingRingtone();
     ringtoneService.stopAll();
     setCallState('connecting');
     queuedCandidatesRef.current = [];
@@ -1211,6 +1626,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           localStreamRef.current.getTracks().forEach((t) => t.stop());
           localStreamRef.current = null;
         }
+        ringtoneService.stopIncomingRingtone();
         ringtoneService.stopAll();
         ringtoneService.playStatusBeep('ended');
         setCallState('ended');
@@ -1236,6 +1652,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       setupSignalingChannel(activeCall.id, activeCall.caller_id);
     } catch (err: any) {
       console.error('[WebRTC-Call] answerCall failed:', err);
+      ringtoneService.stopIncomingRingtone();
+      ringtoneService.stopAll();
       ringtoneService.playStatusBeep('ended');
       setCallState('ended');
       setErrorMessage(
@@ -1261,12 +1679,18 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     terminatingCallIdRef.current = callId;
 
     console.log('[WebRTC-Call] Rejecting call:', callId);
+    ringtoneService.stopIncomingRingtone();
     ringtoneService.stopAll();
     ringtoneService.playStatusBeep('ended');
 
     if (timeoutTimerRef.current) {
       clearTimeout(timeoutTimerRef.current);
       timeoutTimerRef.current = null;
+    }
+
+    if (incomingCallWatchChannelRef.current) {
+      supabase.removeChannel(incomingCallWatchChannelRef.current);
+      incomingCallWatchChannelRef.current = null;
     }
 
     await CallingService.rejectCall(callId);
@@ -1390,40 +1814,9 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   // Speaker / Hands-free: Toggles local audio output without affecting remote participant
   const toggleSpeaker = async () => {
     const nextSpeaker = !isSpeaker;
-    const el = audioElementRef.current as any;
-
-    if (el && typeof el.setSinkId === 'function') {
-      try {
-        if (typeof navigator !== 'undefined' && navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function') {
-          const devices = await navigator.mediaDevices.enumerateDevices();
-          const audioOutputs = devices.filter((d) => d.kind === 'audiooutput');
-          if (nextSpeaker) {
-            const speakerDevice = audioOutputs.find(
-              (d) =>
-                d.deviceId !== 'default' &&
-                (d.label.toLowerCase().includes('speaker') ||
-                  d.label.toLowerCase().includes('hands-free') ||
-                  d.label.toLowerCase().includes('loudspeaker'))
-            );
-            if (speakerDevice?.deviceId) {
-              await el.setSinkId(speakerDevice.deviceId);
-            }
-          } else {
-            const defaultDevice = audioOutputs.find(
-              (d) => d.deviceId === 'default' || d.label.toLowerCase().includes('earpiece')
-            );
-            await el.setSinkId(defaultDevice?.deviceId || '');
-          }
-        }
-      } catch (sinkErr) {
-        console.warn('[WebRTC-Call] setSinkId notice:', sinkErr);
-      }
-    }
-
     setIsSpeaker(nextSpeaker);
-    if (el) {
-      el.volume = nextSpeaker ? 1.0 : 0.8;
-    }
+    isSpeakerRef.current = nextSpeaker;
+    await applyAudioOutputRouting(nextSpeaker);
     console.log('[WebRTC-Call] Toggled speaker mode, isSpeaker:', nextSpeaker);
   };
 
@@ -1485,7 +1878,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         playsInline
         muted={false}
         aria-hidden="true"
-        className="fixed -top-full -left-full w-1 h-1 opacity-0 pointer-events-none"
+        className="fixed bottom-0 right-0 w-px h-px opacity-[0.01] pointer-events-none"
       />
 
       {/* =====================================================================
@@ -1523,7 +1916,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
               {otherParticipant.name}
             </h3>
             <p className="text-xs text-slate-400 mb-4">
-              {otherParticipant.location?.place || 'काममित्र इंटरनेट कॉल'}
+              {otherParticipant.location?.place || `${websiteName} इंटरनेट कॉल`}
             </p>
 
             {/* Legal Recording Disclosure Card */}
@@ -1531,10 +1924,10 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
               <div className="flex items-start gap-2">
                 <ShieldCheck className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                 <div className="text-[11px] leading-relaxed text-slate-300">
-                  <p className="font-semibold text-emerald-300 mb-0.5">
+                  <p className="font-semibold text-emerald-300 mb-0.5 text-[13px]">
                     सुरक्षा व पारदर्शिता हेतु कॉल रिकॉर्डिंग
                   </p>
-                  <p className="text-slate-300">
+                  <p className="text-slate-300 text-[13px]">
                     यह इंटरनेट कॉल सुरक्षा उद्देश्यों से रिकॉर्ड की जा सकती है। कॉल स्वीकार करके आप घोषित नीति के अनुसार रिकॉर्डिंग से सहमत होते हैं।
                   </p>
                 </div>
@@ -1547,7 +1940,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                   className="text-teal-300 hover:text-teal-200 underline flex items-center gap-1 cursor-pointer"
                 >
                   <HelpCircle className="w-3 h-3" />
-                  <span>दिशानिर्देश व नियम पढ़ें</span>
+                  <span className="text-[13px]">दिशानिर्देश व नियम पढ़ें</span>
                 </button>
               </div>
             </div>
@@ -1591,9 +1984,21 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         callState === 'connecting' ||
         callState === 'connected' ||
         callState === 'ended') &&
+        !isCallMinimized &&
         otherParticipant && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
             <div className="relative w-full max-w-sm bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 text-white rounded-3xl p-6 shadow-2xl border border-slate-800 text-center flex flex-col items-center animate-in zoom-in-95 duration-200">
+              {/* Minimize Call Button (Issue 3) */}
+              <button
+                type="button"
+                onClick={() => setIsCallMinimized(true)}
+                className="absolute top-4 left-4 p-2 rounded-full bg-slate-800/80 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer flex items-center gap-1.5 text-xs z-10"
+                title="कॉल को छोटा करें (Minimize Call)"
+              >
+                <ChevronDown className="w-5 h-5" />
+                <span className="hidden sm:inline text-[11px]">छोटा करें</span>
+              </button>
+
               {/* Status Header Badge */}
               <div className="mb-4">
                 {callState === 'calling' && (
@@ -1645,7 +2050,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                 {otherParticipant.name}
               </h3>
               <p className="text-xs text-slate-400 mb-4">
-                {otherParticipant.location?.place || 'काममित्र इंटरनेट कॉल'}
+                {otherParticipant.location?.place || `${websiteName} इंटरनेट कॉल`}
               </p>
 
               {/* Recording Status Badges */}
@@ -1777,6 +2182,106 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                 </button>
                 <span className="text-[11px] font-medium text-slate-400">कॉल समाप्त</span>
               </div>
+            </div>
+          </div>
+        )}
+
+      {/* =====================================================================
+          3. PERSISTENT IN-APP FLOATING CALL BANNER (When Call is Minimized)
+      ====================================================================== */}
+      {(callState === 'calling' ||
+        callState === 'connecting' ||
+        callState === 'connected') &&
+        isCallMinimized &&
+        otherParticipant && (
+          <div
+            className="fixed top-0 inset-x-0 z-50 flex items-center justify-between px-3.5 py-2.5 bg-slate-900/95 backdrop-blur-md text-white border-b border-teal-500/40 shadow-xl transition-all"
+            style={{ paddingTop: 'max(0.625rem, env(safe-area-inset-top))' }}
+          >
+            {/* Left side: Tap to return / maximize call */}
+            <div
+              onClick={() => setIsCallMinimized(false)}
+              className="flex items-center gap-2.5 min-w-0 flex-1 cursor-pointer select-none"
+              title="कॉल स्क्रीन पर वापस जाएं (Tap to return to call)"
+            >
+              <div className="relative shrink-0">
+                <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-teal-400 bg-slate-800 flex items-center justify-center">
+                  {otherParticipant.profile_photo ? (
+                    <img
+                      src={otherParticipant.profile_photo}
+                      alt={otherParticipant.name}
+                      className="w-full h-full object-cover"
+                    />
+                  ) : (
+                    <span className="text-sm font-bold text-white">
+                      {otherParticipant.name.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+                {callState === 'connected' && (
+                  <span className="absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-slate-900 animate-ping" />
+                )}
+              </div>
+
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-bold text-white truncate">
+                  {otherParticipant.name}
+                </p>
+                <p className="text-[11px] text-teal-300 flex items-center gap-1">
+                  {callState === 'calling' && 'घंटी बज रही है...'}
+                  {callState === 'connecting' && 'कनेक्ट हो रहा है...'}
+                  {callState === 'connected' && `सक्रिय कॉल • ${formatDuration(callDuration)}`}
+                </p>
+              </div>
+            </div>
+
+            {/* In-Call Quick Controls */}
+            <div className="flex items-center gap-2 shrink-0">
+              {/* Mute toggle */}
+              <button
+                type="button"
+                disabled={callState !== 'connected' && callState !== 'connecting'}
+                onClick={toggleMute}
+                className={`p-2 rounded-full transition cursor-pointer ${
+                  isMuted ? 'bg-rose-500 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                } ${(callState !== 'connected' && callState !== 'connecting') ? 'opacity-40 cursor-not-allowed' : ''}`}
+                title={isMuted ? 'अनम्यूट करें' : 'म्यूट करें'}
+              >
+                {isMuted ? <MicOff className="w-4 h-4" /> : <Mic className="w-4 h-4" />}
+              </button>
+
+              {/* Speaker toggle */}
+              <button
+                type="button"
+                disabled={callState !== 'connected' && callState !== 'connecting'}
+                onClick={toggleSpeaker}
+                className={`p-2 rounded-full transition cursor-pointer ${
+                  isSpeaker ? 'bg-teal-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
+                } ${(callState !== 'connected' && callState !== 'connecting') ? 'opacity-40 cursor-not-allowed' : ''}`}
+                title={isSpeaker ? 'स्पीकर बंद करें' : 'स्पीकर चालू करें'}
+              >
+                {isSpeaker ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+              </button>
+
+              {/* Red End Call */}
+              <button
+                type="button"
+                onClick={endCall}
+                className="p-2 rounded-full bg-rose-600 hover:bg-rose-700 text-white transition cursor-pointer shadow-md"
+                title="कॉल काटें (End Call)"
+              >
+                <PhoneOff className="w-4 h-4" />
+              </button>
+
+              {/* Maximize */}
+              <button
+                type="button"
+                onClick={() => setIsCallMinimized(false)}
+                className="p-2 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition cursor-pointer"
+                title="कॉल बड़ा करें"
+              >
+                <Maximize2 className="w-4 h-4" />
+              </button>
             </div>
           </div>
         )}

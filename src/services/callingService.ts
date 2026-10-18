@@ -8,8 +8,10 @@ import {
   SignalType,
 } from '../types/calling';
 import { safeStorage } from '../lib/storage';
-import { invalidateChatCaches } from './chatService';
+import { invalidateChatCaches, ChatService } from './chatService';
 import { AdminService } from './adminService';
+import { NotificationService } from './notificationService';
+import { brandingStore } from './brandingService';
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -20,6 +22,8 @@ const ICE_SERVERS: RTCIceServer[] = [
 ];
 
 export class CallingService {
+  private static processedMissedCallIds = new Set<string>();
+
   /**
    * Get set of call IDs deleted by a specific user from local persistent safeStorage
    */
@@ -180,33 +184,13 @@ export class CallingService {
 
       const nowIso = new Date().toISOString();
 
-      // Ensure a conversation row exists between the two users
+      // Ensure a conversation row exists between the two users using centralized ChatService
       let resolvedConversationId = params.conversationId || null;
       if (!resolvedConversationId && params.callerId && params.receiverId) {
         try {
-          const { data: existingConv } = await supabase
-            .from('conversations')
-            .select('id')
-            .or(
-              `and(user_1_id.eq.${params.callerId},user_2_id.eq.${params.receiverId}),and(user_1_id.eq.${params.receiverId},user_2_id.eq.${params.callerId})`
-            )
-            .maybeSingle();
-
-          if (existingConv?.id) {
-            resolvedConversationId = existingConv.id;
-          } else {
-            const { data: newConv } = await supabase
-              .from('conversations')
-              .insert({
-                user_1_id: params.callerId,
-                user_2_id: params.receiverId,
-                last_message_at: nowIso,
-              })
-              .select('id')
-              .maybeSingle();
-            if (newConv?.id) {
-              resolvedConversationId = newConv.id;
-            }
+          const convRes = await ChatService.getOrCreateConversation(params.callerId, params.receiverId);
+          if (convRes?.conversation?.id) {
+            resolvedConversationId = convRes.conversation.id;
           }
         } catch (convErr) {
           console.warn('[CallingService] Conversation resolve notice:', convErr);
@@ -257,7 +241,20 @@ export class CallingService {
 
       const createdCall = data as CallRecord;
 
-      // Broadcast instant incoming call alert directly to recipient's private user channel
+      // 1. Deliver server-side Web Push notification to wake recipient device/PWA if app is closed/backgrounded
+      try {
+        NotificationService.sendIncomingCallPush({
+          recipientId: params.receiverId,
+          callId: createdCall.id,
+          callerId: params.callerId,
+          callerName: params.callerProfile?.name || 'उपयोगकर्ता',
+          callerPhoto: params.callerProfile?.profile_photo || null,
+        }).catch((pushErr) => {
+          console.warn('[CallingService] Incoming call push delivery notice:', pushErr);
+        });
+      } catch {}
+
+      // 2. Broadcast instant incoming call alert directly to recipient's private user channel
       try {
         const userChannel = supabase.channel(`user_calls_${params.receiverId}`);
         await userChannel.subscribe((status) => {
@@ -279,6 +276,15 @@ export class CallingService {
         });
       } catch (broadcastErr) {
         console.warn('Instant user broadcast failed, relying on postgres_changes:', broadcastErr);
+      }
+
+      // 3. Dispatch local event so open chat pages update immediately
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('km_call_updated', {
+            detail: { callId: createdCall.id, conversationId: resolvedConversationId, status: 'calling' },
+          })
+        );
       }
 
       return { success: true, call: createdCall };
@@ -341,6 +347,18 @@ export class CallingService {
         }
       }
 
+      // Dismiss incoming call notification on receiver's device
+      NotificationService.dismissCallNotification(params.callId);
+
+      // Dispatch local event for chat pages
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('km_call_updated', {
+            detail: { callId: params.callId, status: 'connecting' },
+          })
+        );
+      }
+
       return { success: true, adminRecordingActive };
     } catch (err: any) {
       return { success: false, error: err?.message || 'कॉल स्वीकार करने में विफल' };
@@ -362,6 +380,17 @@ export class CallingService {
         })
         .eq('id', callId)
         .neq('status', 'ended');
+
+      // Dismiss incoming notification
+      NotificationService.dismissCallNotification(callId);
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('km_call_updated', {
+            detail: { callId, status: 'connected' },
+          })
+        );
+      }
 
       return !error;
     } catch {
@@ -409,6 +438,28 @@ export class CallingService {
             .eq('id', callId)
             .maybeSingle();
 
+          // Dismiss obsolete incoming call notification (both local SW and remote Web Push)
+          NotificationService.dismissCallNotification(callId, callRow?.receiver_id);
+
+          // Broadcast rejected event directly to caller's private channel
+          if (callRow?.caller_id) {
+            try {
+              const callerChan = supabase.channel(`user_calls_${callRow.caller_id}`);
+              callerChan.subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                  callerChan
+                    .send({
+                      type: 'broadcast',
+                      event: 'call_ended',
+                      payload: { callId, status: 'rejected', reason: 'rejected' },
+                    })
+                    .then(() => setTimeout(() => supabase.removeChannel(callerChan), 2000))
+                    .catch(() => {});
+                }
+              });
+            } catch {}
+          }
+
           if (callRow?.conversation_id) {
             await supabase
               .from('conversations')
@@ -417,7 +468,19 @@ export class CallingService {
           }
           if (callRow?.caller_id) invalidateChatCaches(callRow.caller_id);
           if (callRow?.receiver_id) invalidateChatCaches(callRow.receiver_id);
-        } catch {}
+        } catch {
+          NotificationService.dismissCallNotification(callId);
+        }
+      } else {
+        NotificationService.dismissCallNotification(callId);
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('km_call_updated', {
+            detail: { callId, status: 'rejected' },
+          })
+        );
       }
 
       return true;
@@ -466,14 +529,66 @@ export class CallingService {
           .eq('id', params.callId);
       }
 
-      // Update linked conversation timestamp and invalidate caches
+      // Fetch call record for linked conversation & missed call notifications
       if (params.callId) {
         try {
           const { data: callRow } = await supabase
             .from('calls')
-            .select('conversation_id, caller_id, receiver_id')
+            .select(`
+              conversation_id,
+              caller_id,
+              receiver_id,
+              caller:profiles!calls_caller_id_fkey(id, name, profile_photo)
+            `)
             .eq('id', params.callId)
             .maybeSingle();
+
+          // Dismiss obsolete incoming call notification on all devices (both local and remote)
+          NotificationService.dismissCallNotification(params.callId, callRow?.receiver_id);
+
+          // Broadcast instant call_ended event directly to recipient's private user channel (stops incoming ringtone immediately)
+          if (callRow?.receiver_id) {
+            try {
+              const rxChan = supabase.channel(`user_calls_${callRow.receiver_id}`);
+              rxChan.subscribe((status) => {
+                if (status === 'SUBSCRIBED') {
+                  rxChan
+                    .send({
+                      type: 'broadcast',
+                      event: 'call_ended',
+                      payload: {
+                        callId: params.callId,
+                        status: finalStatus,
+                        reason: finalReason,
+                      },
+                    })
+                    .then(() => setTimeout(() => supabase.removeChannel(rxChan), 2000))
+                    .catch(() => {});
+                }
+              });
+            } catch {}
+          }
+
+          // Also broadcast to call_room in case room was active
+          try {
+            const roomChan = supabase.channel(`call_room_${params.callId}`);
+            roomChan.subscribe((status) => {
+              if (status === 'SUBSCRIBED') {
+                roomChan
+                  .send({
+                    type: 'broadcast',
+                    event: 'signal',
+                    payload: {
+                      call_id: params.callId,
+                      type: 'ended',
+                      payload: { reason: finalReason },
+                    },
+                  })
+                  .then(() => setTimeout(() => supabase.removeChannel(roomChan), 2000))
+                  .catch(() => {});
+              }
+            });
+          } catch {}
 
           if (callRow?.conversation_id) {
             await supabase
@@ -483,7 +598,49 @@ export class CallingService {
           }
           if (callRow?.caller_id) invalidateChatCaches(callRow.caller_id);
           if (callRow?.receiver_id) invalidateChatCaches(callRow.receiver_id);
-        } catch {}
+
+          // Handle Missed Call notification for recipient if unanswered
+          const isMissed = finalStatus === 'missed' || finalReason === 'timeout_unanswered';
+          if (isMissed && callRow && !this.processedMissedCallIds.has(params.callId)) {
+            this.processedMissedCallIds.add(params.callId);
+
+            const callerName = (callRow.caller as any)?.name || 'उपयोगकर्ता';
+            const callerPhoto = (callRow.caller as any)?.profile_photo || null;
+
+            // 1. Send push notification to recipient
+            NotificationService.sendMissedCallPush({
+              recipientId: callRow.receiver_id,
+              callId: params.callId,
+              callerId: callRow.caller_id,
+              callerName,
+              callerPhoto,
+              conversationId: callRow.conversation_id || null,
+            }).catch(() => {});
+
+            // 2. Persist in user_notifications table
+            try {
+              await supabase.from('user_notifications').insert({
+                user_id: callRow.receiver_id,
+                sender_id: callRow.caller_id,
+                notification_type: 'missed_call',
+                target_type: 'call',
+                target_id: params.callId,
+                comment_preview: 'मिस्ड इंटरनेट कॉल',
+                is_read: false,
+              });
+            } catch {}
+          }
+        } catch (postEndErr) {
+          console.warn('[CallingService] Post endCall processing notice:', postEndErr);
+        }
+      }
+
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('km_call_updated', {
+            detail: { callId: params.callId, status: finalStatus },
+          })
+        );
       }
 
       return true;
@@ -625,7 +782,8 @@ export class CallingService {
    */
   public static subscribeToIncomingCalls(
     userId: string,
-    onIncoming: (call: CallRecord) => void
+    onIncoming: (call: CallRecord) => void,
+    onCallTerminated?: (callId: string, status?: string, reason?: string) => void
   ): () => void {
     const channelName = `user_calls_${userId}`;
 
@@ -633,7 +791,7 @@ export class CallingService {
       .channel(channelName, {
         config: { broadcast: { self: false } },
       })
-      // 1. Direct WebSocket broadcast listener
+      // 1. Direct WebSocket broadcast listener for incoming calls
       .on('broadcast', { event: 'incoming_call' }, async ({ payload }) => {
         if (!payload?.call) return;
         const incomingCall = payload.call as CallRecord;
@@ -655,7 +813,18 @@ export class CallingService {
           });
         }
       })
-      // 2. Database postgres_changes listener
+      // 2. Direct WebSocket broadcast listener for cancelled / ended calls
+      .on('broadcast', { event: 'call_ended' }, ({ payload }) => {
+        if (payload?.callId) {
+          onCallTerminated?.(payload.callId, payload.status || 'ended', payload.reason || 'caller_ended');
+        }
+      })
+      .on('broadcast', { event: 'call_cancelled' }, ({ payload }) => {
+        if (payload?.callId) {
+          onCallTerminated?.(payload.callId, payload.status || 'ended', payload.reason || 'caller_ended');
+        }
+      })
+      // 3. Database postgres_changes listener for new incoming calls
       .on(
         'postgres_changes',
         {
@@ -677,6 +846,29 @@ export class CallingService {
               ...callData,
               caller: callerProfile as any,
             });
+          }
+        }
+      )
+      // 4. Database postgres_changes listener for call status updates (ended, rejected, missed)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'calls',
+          filter: `receiver_id=eq.${userId}`,
+        },
+        (payload) => {
+          const updated = payload.new as CallRecord;
+          if (
+            updated &&
+            (updated.status === 'ended' || updated.status === 'rejected' || updated.status === 'missed')
+          ) {
+            onCallTerminated?.(
+              updated.id,
+              updated.status,
+              updated.ended_reason || (updated as any).end_reason || 'caller_ended'
+            );
           }
         }
       )
@@ -1023,7 +1215,11 @@ export class CallingService {
         .order('created_at', { ascending: false })
         .limit(100);
 
-      if (params.userId1 && params.userId2) {
+      if (params.conversationId && params.userId1 && params.userId2) {
+        query = query.or(
+          `conversation_id.eq.${params.conversationId},and(caller_id.eq.${params.userId1},receiver_id.eq.${params.userId2}),and(caller_id.eq.${params.userId2},receiver_id.eq.${params.userId1})`
+        );
+      } else if (params.userId1 && params.userId2) {
         query = query.or(
           `and(caller_id.eq.${params.userId1},receiver_id.eq.${params.userId2}),and(caller_id.eq.${params.userId2},receiver_id.eq.${params.userId1})`
         );

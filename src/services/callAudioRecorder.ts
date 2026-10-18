@@ -125,6 +125,15 @@ export class CallAudioRecorder {
   }
 
   /**
+   * Resume AudioContext if suspended by browser power-saving or screen lock
+   */
+  public resumeAudioContext(): void {
+    if (this.audioContext && this.audioContext.state === 'suspended') {
+      this.audioContext.resume().catch(() => {});
+    }
+  }
+
+  /**
    * Stop recording and return combined audio result
    */
   public async stop(): Promise<RecordedAudioResult | null> {

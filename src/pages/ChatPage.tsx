@@ -391,7 +391,13 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       )
       .subscribe();
 
+    const handleLocalCallUpdate = () => {
+      fetchCalls();
+    };
+    window.addEventListener('km_call_updated', handleLocalCallUpdate);
+
     return () => {
+      window.removeEventListener('km_call_updated', handleLocalCallUpdate);
       supabase.removeChannel(callSub);
     };
   }, [user?.id, otherUserId, conversationId]);
@@ -1881,7 +1887,12 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                 if (item.type === 'call') {
                   const call = item.data;
                   const isOutgoing = call.caller_id === user?.id;
-                  const isMissed = call.status === 'missed';
+                  const isCallerCancelledBeforeAnswer =
+                    call.status === 'ended' &&
+                    (call.duration_seconds || 0) === 0 &&
+                    (call.ended_reason === 'caller_ended' || (call as any).end_reason === 'caller_ended');
+                  const isMissed = call.status === 'missed' || (!isOutgoing && isCallerCancelledBeforeAnswer);
+                  const isCancelledOutgoing = isOutgoing && isCallerCancelledBeforeAnswer;
                   const isRejected = call.status === 'rejected';
                   const isFailed = call.status === 'failed';
                   const personalRec = personalRecordingsMap[call.id];
@@ -1933,6 +1944,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                                 ? 'bg-rose-100 text-rose-600 border border-rose-200'
                                 : isRejected
                                 ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                                : isCancelledOutgoing
+                                ? 'bg-slate-100 text-slate-600 border border-slate-200'
                                 : isOutgoing
                                 ? 'bg-teal-100 text-teal-700 border border-teal-200'
                                 : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
@@ -1942,6 +1955,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                               <PhoneMissed className="w-4 h-4 text-rose-600" />
                             ) : isRejected ? (
                               <PhoneOff className="w-4 h-4 text-amber-700" />
+                            ) : isCancelledOutgoing ? (
+                              <PhoneOff className="w-4 h-4 text-slate-600" />
                             ) : isOutgoing ? (
                               <PhoneOutgoing className="w-4 h-4 text-teal-700" />
                             ) : (
@@ -1955,6 +1970,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                                 ? (isOutgoing ? 'अनुत्तरित आउटगोइंग कॉल' : 'मिस्ड इंटरनेट कॉल')
                                 : isRejected
                                 ? 'कॉल अस्वीकार की गई'
+                                : isCancelledOutgoing
+                                ? 'आउटगोइंग इंटरनेट कॉल (रद्द की गई)'
                                 : isFailed
                                 ? 'कॉल विफल'
                                 : isOutgoing

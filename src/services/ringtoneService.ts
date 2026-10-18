@@ -97,6 +97,19 @@ class RingtoneService {
         osc1.onended = cleanupOscillators;
         osc2.onended = cleanupOscillators;
 
+        // Check again before starting: ringtone could have been cancelled synchronously
+        if (!this.isRinging) {
+          try {
+            osc1.stop();
+            osc2.stop();
+            osc1.disconnect();
+            osc2.disconnect();
+            masterGain.disconnect();
+          } catch {}
+          this.activeIncomingOscillators.clear();
+          return;
+        }
+
         osc1.start(now);
         osc2.start(now);
         osc1.stop(now + 2.0);
@@ -127,11 +140,18 @@ class RingtoneService {
       this.ringIntervalId = null;
     }
 
-    // Immediately silence incoming master gain
+    // Cancel vibration immediately
+    try {
+      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
+        navigator.vibrate(0);
+      }
+    } catch {}
+
+    // Immediately silence and disconnect incoming master gain
     try {
       if (this.incomingMasterGain) {
         if (this.audioCtx && this.audioCtx.state !== 'closed') {
-          this.incomingMasterGain.gain.cancelScheduledValues(this.audioCtx.currentTime);
+          this.incomingMasterGain.gain.cancelScheduledValues(0);
           this.incomingMasterGain.gain.setValueAtTime(0, this.audioCtx.currentTime);
         }
         this.incomingMasterGain.disconnect();
@@ -139,21 +159,15 @@ class RingtoneService {
       }
     } catch {}
 
-    // Immediately stop and disconnect all active incoming oscillators
+    // Immediately remove ended handlers, stop, and disconnect all active incoming oscillators
     this.activeIncomingOscillators.forEach((osc) => {
       try {
+        osc.onended = null;
         osc.stop();
         osc.disconnect();
       } catch {}
     });
     this.activeIncomingOscillators.clear();
-
-    // Cancel vibration
-    try {
-      if (typeof navigator !== 'undefined' && 'vibrate' in navigator) {
-        navigator.vibrate(0);
-      }
-    } catch {}
   }
 
   /**

@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
+import webpush from 'web-push';
 
 // @ts-ignore
 import { fetchRemoteBranding, buildManifest, generatePwaIcons } from './scripts/generate-icons.js';
@@ -116,15 +117,125 @@ export default defineConfig(async () => {
               return;
             }
 
+            const devPushSubs = (globalThis as any).__devPushSubs || new Map();
+            (globalThis as any).__devPushSubs = devPushSubs;
+
             if (url === '/api/push/subscribe' && req.method === 'POST') {
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ success: true }));
+              let body = '';
+              req.on('data', (chunk: any) => { body += chunk; });
+              req.on('end', () => {
+                try {
+                  const parsed = JSON.parse(body || '{}');
+                  if (parsed.userId && parsed.subscription) {
+                    const existing = devPushSubs.get(parsed.userId) || [];
+                    const filtered = existing.filter((s: any) => s.endpoint !== parsed.subscription.endpoint);
+                    filtered.push(parsed.subscription);
+                    devPushSubs.set(parsed.userId, filtered);
+                  }
+                } catch {}
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ success: true }));
+              });
               return;
             }
 
             if (url === '/api/push/unsubscribe' && req.method === 'POST') {
-              res.setHeader('Content-Type', 'application/json');
-              res.end(JSON.stringify({ success: true }));
+              let body = '';
+              req.on('data', (chunk: any) => { body += chunk; });
+              req.on('end', () => {
+                try {
+                  const parsed = JSON.parse(body || '{}');
+                  if (parsed.userId && parsed.endpoint) {
+                    const existing = devPushSubs.get(parsed.userId) || [];
+                    devPushSubs.set(parsed.userId, existing.filter((s: any) => s.endpoint !== parsed.endpoint));
+                  }
+                } catch {}
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ success: true }));
+              });
+              return;
+            }
+
+            if (url === '/api/push/send' && req.method === 'POST') {
+              let body = '';
+              req.on('data', (chunk: any) => { body += chunk; });
+              req.on('end', async () => {
+                try {
+                  const { recipientId, title, body: msgBody, icon, badge, tag, data } = JSON.parse(body || '{}');
+                  let subs = devPushSubs.get(recipientId) || [];
+                  if (subs.length === 0) {
+                    try {
+                      const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://hhvxanktvbncyeedzzdf.supabase.co';
+                      const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_cdXk34V8WeafviYplVRbig_fcDmRDj0';
+                      const r = await fetch(`${supabaseUrl}/rest/v1/push_subscriptions?user_id=eq.${recipientId}&select=endpoint,p256dh,auth`, {
+                        headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }
+                      });
+                      if (r.ok) {
+                        const rows = await r.json();
+                        if (Array.isArray(rows) && rows.length > 0) {
+                          subs = rows.map((row: any) => ({
+                            endpoint: row.endpoint,
+                            keys: { p256dh: row.p256dh, auth: row.auth }
+                          }));
+                          devPushSubs.set(recipientId, subs);
+                        }
+                      }
+                    } catch {}
+                  }
+
+                  const vapidPub = process.env.VAPID_PUBLIC_KEY || process.env.VITE_VAPID_PUBLIC_KEY || 'BIj-hKqgD1VNvcGsg_3Z5zzyBE57jQoTfJ6EDMGZ6k9n99d1EUxKO9G6k_HxCyrUFi9kXXP_raZu9Qyv2y2M0o0';
+                  const vapidPriv = process.env.VAPID_PRIVATE_KEY || 'Hgtds1t5TlEd9xkNBIDQVtY-jCgW64n5cRJv99zfsBc';
+                  const vapidSub = process.env.VAPID_SUBJECT || 'mailto:niveshkumar1230@gmail.com';
+                  webpush.setVapidDetails(vapidSub, vapidPub, vapidPriv);
+
+                  const payload = JSON.stringify({
+                    title,
+                    body: msgBody || '',
+                    icon: icon || '/pwa-192x192.png',
+                    badge: badge || '/favicon.ico',
+                    tag: tag || 'kaammitra_notification',
+                    data: data || {},
+                  });
+
+                  let sent = 0;
+                  for (const sub of subs) {
+                    try {
+                      await webpush.sendNotification(sub, payload, { TTL: 86400, urgency: 'high' });
+                      sent++;
+                    } catch {}
+                  }
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ success: true, delivered: sent }));
+                } catch (e: any) {
+                  res.setHeader('Content-Type', 'application/json');
+                  res.end(JSON.stringify({ success: false, error: e?.message }));
+                }
+              });
+              return;
+            }
+
+            if (url === '/api/push/close' && req.method === 'POST') {
+              let body = '';
+              req.on('data', (chunk: any) => { body += chunk; });
+              req.on('end', async () => {
+                try {
+                  const { recipientId, callId } = JSON.parse(body || '{}');
+                  const subs = devPushSubs.get(recipientId) || [];
+                  const vapidPub = process.env.VAPID_PUBLIC_KEY || process.env.VITE_VAPID_PUBLIC_KEY || 'BIj-hKqgD1VNvcGsg_3Z5zzyBE57jQoTfJ6EDMGZ6k9n99d1EUxKO9G6k_HxCyrUFi9kXXP_raZu9Qyv2y2M0o0';
+                  const vapidPriv = process.env.VAPID_PRIVATE_KEY || 'Hgtds1t5TlEd9xkNBIDQVtY-jCgW64n5cRJv99zfsBc';
+                  const vapidSub = process.env.VAPID_SUBJECT || 'mailto:niveshkumar1230@gmail.com';
+                  webpush.setVapidDetails(vapidSub, vapidPub, vapidPriv);
+
+                  const payload = JSON.stringify({ action: 'close_call', callId, tag: `call_${callId}` });
+                  for (const sub of subs) {
+                    try {
+                      await webpush.sendNotification(sub, payload, { TTL: 60 });
+                    } catch {}
+                  }
+                } catch {}
+                res.setHeader('Content-Type', 'application/json');
+                res.end(JSON.stringify({ success: true }));
+              });
               return;
             }
 

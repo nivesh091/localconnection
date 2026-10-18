@@ -21,6 +21,7 @@ import { CallingService } from '../services/callingService';
 import { CallRecording } from '../types/calling';
 import { RecordingGuidelinesModal } from './RecordingGuidelinesModal';
 import { ProfileService } from '../services/profileService';
+import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
 
 interface CallRecordingsSectionProps {
   lang?: 'hi' | 'en';
@@ -30,6 +31,7 @@ export const CallRecordingsSection: React.FC<CallRecordingsSectionProps> = ({
   lang = 'hi',
 }) => {
   const { user } = useAuth();
+  const { websiteName, websiteNameEn } = useWebsiteBranding();
   const [recordings, setRecordings] = useState<CallRecording[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [error, setError] = useState<string | null>(null);
@@ -192,7 +194,7 @@ export const CallRecordingsSection: React.FC<CallRecordingsSectionProps> = ({
     try {
       const a = document.createElement('a');
       a.href = url;
-      a.download = `KaamMitra_Call_${rec.call_id.slice(0, 8)}.webm`;
+      a.download = `${websiteNameEn || 'Call'}_${rec.call_id.slice(0, 8)}.webm`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -210,7 +212,7 @@ export const CallRecordingsSection: React.FC<CallRecordingsSectionProps> = ({
     if (navigator.share) {
       try {
         await navigator.share({
-          title: 'KaamMitra Call Recording',
+          title: `${websiteName} Call Recording`,
           text: 'कॉल रिकॉर्डिंग (सुरक्षित लिंक):',
           url,
         });

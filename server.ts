@@ -100,7 +100,41 @@ app.post('/api/push/send', async (req, res) => {
     return;
   }
 
-  const subs = userSubscriptionsMap.get(recipientId) || [];
+  let subs = userSubscriptionsMap.get(recipientId) || [];
+
+  // Fallback to push_subscriptions table in Supabase if in-memory store has no active subscription
+  if (subs.length === 0) {
+    try {
+      const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://hhvxanktvbncyeedzzdf.supabase.co';
+      const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_cdXk34V8WeafviYplVRbig_fcDmRDj0';
+      const resp = await fetch(`${supabaseUrl}/rest/v1/push_subscriptions?user_id=eq.${recipientId}&select=endpoint,p256dh,auth`, {
+        headers: {
+          apikey: supabaseKey,
+          Authorization: `Bearer ${supabaseKey}`,
+        },
+      });
+      if (resp.ok) {
+        const rows = await resp.json();
+        if (Array.isArray(rows) && rows.length > 0) {
+          subs = rows.map((r: any) => ({
+            userId: recipientId,
+            subscription: {
+              endpoint: r.endpoint,
+              keys: {
+                p256dh: r.p256dh,
+                auth: r.auth,
+              },
+            } as any,
+            createdAt: Date.now(),
+          }));
+          userSubscriptionsMap.set(recipientId, subs);
+        }
+      }
+    } catch (e) {
+      console.warn('[WebPush] DB subscription fetch notice:', e);
+    }
+  }
+
   if (subs.length === 0) {
     res.json({ success: true, delivered: 0, notice: 'No active push subscriptions for recipient' });
     return;
@@ -143,6 +177,39 @@ app.post('/api/push/send', async (req, res) => {
   }
 
   res.json({ success: true, delivered: deliveredCount });
+});
+
+// 5. Dismiss/close active call notification across recipient's devices
+app.post('/api/push/close', async (req, res) => {
+  const { recipientId, callId } = req.body;
+
+  if (!recipientId || !callId) {
+    res.status(400).json({ error: 'Missing recipientId or callId' });
+    return;
+  }
+
+  const subs = userSubscriptionsMap.get(recipientId) || [];
+  if (subs.length === 0) {
+    res.json({ success: true, delivered: 0 });
+    return;
+  }
+
+  const payloadString = JSON.stringify({
+    action: 'close_call',
+    callId,
+    tag: `call_${callId}`,
+  });
+
+  const promises = subs.map(async (item) => {
+    try {
+      await webpush.sendNotification(item.subscription, payloadString, {
+        TTL: 60,
+      });
+    } catch {}
+  });
+
+  await Promise.all(promises);
+  res.json({ success: true });
 });
 
 // ----------------------------------------------------------------------------

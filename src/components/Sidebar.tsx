@@ -50,6 +50,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
   usePopupBackDismiss(isOpen, onClose);
 
   const [copiedShare, setCopiedShare] = useState(false);
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [isLoggingOut, setIsLoggingOut] = useState(false);
+
+  // Close logout confirmation on Escape key without logging out
+  useEffect(() => {
+    if (!showLogoutConfirm) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isLoggingOut) {
+        setShowLogoutConfirm(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showLogoutConfirm, isLoggingOut]);
 
   const handleShareWebsite = async () => {
     const siteUrl = resolvedShareUrl;
@@ -145,10 +159,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
     onClose();
   };
 
-  const handleLogout = async () => {
-    await logout();
-    onClose();
-    onNavigate('home');
+  const handleConfirmLogout = async () => {
+    if (isLoggingOut) return;
+    setIsLoggingOut(true);
+    try {
+      await logout();
+      setShowLogoutConfirm(false);
+      onClose();
+      onNavigate('home');
+    } finally {
+      setIsLoggingOut(false);
+    }
   };
 
   const navItems = [
@@ -315,7 +336,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div className="p-3 border-t border-slate-100 bg-slate-50/50">
           {user ? (
             <button
-              onClick={handleLogout}
+              type="button"
+              onClick={() => setShowLogoutConfirm(true)}
               className="w-full flex items-center gap-3 px-3.5 py-2 text-sm font-medium text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
             >
               <LogOut className="w-5 h-5 text-rose-500" />
@@ -376,6 +398,69 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 className="px-4 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-xl font-bold transition cursor-pointer"
               >
                 {t.close || 'बंद करें'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Logout Confirmation Dialog */}
+      {showLogoutConfirm && (
+        <div
+          className="fixed inset-0 z-70 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => {
+            if (!isLoggingOut) setShowLogoutConfirm(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-sm p-5 shadow-2xl border border-slate-200 space-y-4 animate-in zoom-in-95 duration-150 text-left"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="logout-dialog-title"
+          >
+            <div className="flex items-start gap-3">
+              <div className="w-10 h-10 rounded-xl bg-rose-100 text-rose-600 flex items-center justify-center shrink-0">
+                <LogOut className="w-5 h-5" />
+              </div>
+              <div className="min-w-0 flex-1">
+                <h3 id="logout-dialog-title" className="text-base font-bold text-slate-900">
+                  {lang === 'hi' ? 'लॉगआउट की पुष्टि' : 'Confirm Logout'}
+                </h3>
+                <p className="text-xs text-slate-600 mt-1 leading-relaxed">
+                  {lang === 'hi'
+                    ? 'क्या आप निश्चित रूप से लॉगआउट करना चाहते हैं?'
+                    : 'Are you sure you want to log out?'}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isLoggingOut}
+                onClick={() => setShowLogoutConfirm(false)}
+                className="px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-100 active:bg-slate-200 rounded-xl transition cursor-pointer disabled:opacity-50"
+              >
+                {lang === 'hi' ? 'रद्द करें (Cancel)' : 'Cancel'}
+              </button>
+              <button
+                type="button"
+                disabled={isLoggingOut}
+                onClick={handleConfirmLogout}
+                className="px-4 py-2 text-xs font-bold bg-rose-600 hover:bg-rose-700 active:scale-95 text-white rounded-xl shadow-xs transition cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {isLoggingOut ? (
+                  <>
+                    <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    <span>{lang === 'hi' ? 'लॉगआउट हो रहा है...' : 'Logging out...'}</span>
+                  </>
+                ) : (
+                  <>
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>{lang === 'hi' ? 'लॉगआउट करें' : 'Log out'}</span>
+                  </>
+                )}
               </button>
             </div>
           </div>

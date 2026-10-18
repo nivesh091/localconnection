@@ -11,6 +11,21 @@ self.addEventListener('push', function (event) {
     }
   }
 
+  // Handle immediate call notification dismissal from remote action
+  if (data.action === 'close_call' && data.callId) {
+    var closeCallId = data.callId;
+    event.waitUntil(
+      self.registration.getNotifications().then(function (notifications) {
+        notifications.forEach(function (n) {
+          if (n.tag === 'call_' + closeCallId || (n.data && n.data.callId === closeCallId)) {
+            n.close();
+          }
+        });
+      })
+    );
+    return;
+  }
+
   var title = data.title || data.appName || 'सूचना';
   var senderName = data.sender_name || data.senderName;
   if (!data.title && senderName) {
@@ -20,19 +35,25 @@ self.addEventListener('push', function (event) {
   var body = data.body || data.message || 'आपको एक नया संदेश मिला है।';
   var icon = data.icon || '/pwa-192x192.png';
   var badge = data.badge || '/favicon.ico';
+  var callId = data.callId || data.call_id || (data.data && (data.data.callId || data.data.call_id)) || '';
+  var isIncomingCall = data.type === 'incoming_call' || (data.data && data.data.type === 'incoming_call') || (data.tag && data.tag.startsWith('call_'));
+  var isMissedCall = data.type === 'missed_call' || (data.data && data.data.type === 'missed_call') || (data.tag && data.tag.startsWith('missed_call_'));
+
   var tag =
     data.tag ||
-    (data.message_id ? 'msg_' + data.message_id : data.comment_id ? 'cmt_' + data.comment_id : 'kaammitra_notification');
+    (callId ? (isMissedCall ? 'missed_call_' + callId : 'call_' + callId) : data.message_id ? 'msg_' + data.message_id : data.comment_id ? 'cmt_' + data.comment_id : 'kaammitra_notification');
 
-  var conversationId = data.conversationId || data.conversation_id || '';
-  var senderId = data.senderId || data.sender_id || '';
+  var conversationId = data.conversationId || data.conversation_id || (data.data && (data.data.conversationId || data.data.conversation_id)) || '';
+  var senderId = data.senderId || data.sender_id || (data.data && (data.data.senderId || data.data.sender_id)) || '';
   var targetType = data.targetType || data.target_type || '';
   var targetId = data.targetId || data.target_id || '';
   var commentId = data.commentId || data.comment_id || '';
 
-  var targetUrl = data.url || '';
+  var targetUrl = data.url || (data.data && data.data.url) || '';
   if (!targetUrl) {
-    if (targetType === 'worker' && targetId) {
+    if (callId && isIncomingCall) {
+      targetUrl = '/#call=' + encodeURIComponent(callId);
+    } else if (targetType === 'worker' && targetId) {
       targetUrl = '/#worker=' + encodeURIComponent(targetId) + (commentId ? '&comment=' + encodeURIComponent(commentId) : '');
     } else if (targetType === 'requirement' && targetId) {
       targetUrl = '/#requirement=' + encodeURIComponent(targetId) + (commentId ? '&comment=' + encodeURIComponent(commentId) : '');
@@ -56,10 +77,13 @@ self.addEventListener('push', function (event) {
       targetType: targetType,
       targetId: targetId,
       commentId: commentId,
+      callId: callId,
+      isIncomingCall: isIncomingCall,
+      isMissedCall: isMissedCall,
       messageId: data.message_id || data.messageId,
       timestamp: Date.now(),
     },
-    vibrate: [200, 100, 200],
+    vibrate: isIncomingCall ? [500, 250, 500, 250, 500] : [200, 100, 200],
     timestamp: Date.now(),
   };
 
@@ -76,6 +100,7 @@ self.addEventListener('notificationclick', function (event) {
   var commentId = notificationData.commentId || '';
   var conversationId = notificationData.conversationId || '';
   var senderId = notificationData.senderId || '';
+  var callId = notificationData.callId || '';
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
@@ -84,7 +109,13 @@ self.addEventListener('notificationclick', function (event) {
         var client = clientList[i];
         if ('focus' in client) {
           client.focus();
-          if (targetType && targetId) {
+          if (callId) {
+            client.postMessage({
+              type: 'NAVIGATE_CALL',
+              callId: callId,
+              url: targetUrl,
+            });
+          } else if (targetType && targetId) {
             client.postMessage({
               type: 'NAVIGATE_TARGET',
               targetType: targetType,
@@ -116,5 +147,16 @@ self.addEventListener('message', function (event) {
     var title = event.data.title || event.data.appName || 'सूचना';
     var options = event.data.options || {};
     self.registration.showNotification(title, options);
+  } else if (event.data && event.data.type === 'CLOSE_CALL_NOTIFICATION') {
+    var callIdToClose = event.data.callId;
+    if (callIdToClose) {
+      self.registration.getNotifications().then(function (notifications) {
+        notifications.forEach(function (n) {
+          if (n.tag === 'call_' + callIdToClose || (n.data && n.data.callId === callIdToClose)) {
+            n.close();
+          }
+        });
+      });
+    }
   }
 });

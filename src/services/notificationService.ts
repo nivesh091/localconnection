@@ -68,9 +68,9 @@ export class NotificationService {
   }
 
   /**
-   * Register Web Push subscription with Service Worker PushManager
+   * Register Web Push subscription with Service Worker PushManager and sync with backend & Supabase
    */
-  static async registerPushSubscription(): Promise<PushSubscription | null> {
+  static async registerPushSubscription(userId?: string): Promise<PushSubscription | null> {
     if (!this.isSupported() || Notification.permission !== 'granted') {
       return null;
     }
@@ -84,7 +84,9 @@ export class NotificationService {
       let sub = await reg.pushManager.getSubscription();
       if (!sub) {
         // Optional VAPID key from environment
-        const vapidPublicKey = import.meta.env.VITE_VAPID_PUBLIC_KEY;
+        const vapidPublicKey =
+          (import.meta as any).env?.VITE_VAPID_PUBLIC_KEY ||
+          'BIj-hKqgD1VNvcGsg_3Z5zzyBE57jQoTfJ6EDMGZ6k9n99d1EUxKO9G6k_HxCyrUFi9kXXP_raZu9Qyv2y2M0o0';
         const options: PushSubscriptionOptionsInit = {
           userVisibleOnly: true,
         };
@@ -96,11 +98,173 @@ export class NotificationService {
         sub = await reg.pushManager.subscribe(options);
       }
 
+      if (sub && userId) {
+        const subJson = sub.toJSON();
+        const p256dh = subJson.keys?.p256dh;
+        const auth = subJson.keys?.auth;
+
+        // 1. Sync to local server
+        fetch('/api/push/subscribe', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            userId,
+            subscription: subJson,
+            userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+          }),
+        }).catch(() => {});
+
+        // 2. Persist to Supabase push_subscriptions table
+        if (p256dh && auth) {
+          try {
+            await supabase.from('push_subscriptions').upsert(
+              {
+                user_id: userId,
+                endpoint: sub.endpoint,
+                p256dh,
+                auth,
+                user_agent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: 'user_id,endpoint' }
+            );
+          } catch {}
+        }
+      }
+
       return sub;
     } catch (err) {
       console.warn('[NotificationService] PushManager subscription notice:', err);
       return null;
     }
+  }
+
+  /**
+   * Send a Web Push notification to a recipient via backend push service
+   */
+  static async sendPushNotification(params: {
+    recipientId: string;
+    title: string;
+    body: string;
+    icon?: string;
+    badge?: string;
+    tag?: string;
+    data?: any;
+  }): Promise<boolean> {
+    try {
+      if (!params.recipientId || !params.title) return false;
+
+      const res = await fetch('/api/push/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipientId: params.recipientId,
+          title: params.title,
+          body: params.body,
+          icon: params.icon || '/pwa-192x192.png',
+          badge: params.badge || '/favicon.ico',
+          tag: params.tag || 'kaammitra_notification',
+          data: params.data || {},
+        }),
+      });
+
+      return res.ok;
+    } catch (err) {
+      console.warn('[NotificationService] Send push error:', err);
+      return false;
+    }
+  }
+
+  /**
+   * Send incoming-call push notification with dynamic administrator branding
+   */
+  static async sendIncomingCallPush(params: {
+    recipientId: string;
+    callId: string;
+    callerId: string;
+    callerName: string;
+    callerPhoto?: string | null;
+  }): Promise<boolean> {
+    const appName = brandingStore.getName('hi');
+    const title = params.callerName ? `${params.callerName} — ${appName}` : appName;
+    const body = 'इनकमिंग इंटरनेट कॉल... (Incoming Call)';
+
+    return await this.sendPushNotification({
+      recipientId: params.recipientId,
+      title,
+      body,
+      icon: params.callerPhoto || '/pwa-192x192.png',
+      badge: '/favicon.ico',
+      tag: `call_${params.callId}`,
+      data: {
+        type: 'incoming_call',
+        callId: params.callId,
+        callerId: params.callerId,
+        callerName: params.callerName,
+        url: `/#call=${encodeURIComponent(params.callId)}`,
+      },
+    });
+  }
+
+  /**
+   * Send missed-call notification to recipient with dynamic administrator branding
+   */
+  static async sendMissedCallPush(params: {
+    recipientId: string;
+    callId: string;
+    callerId: string;
+    callerName: string;
+    callerPhoto?: string | null;
+    conversationId?: string | null;
+  }): Promise<boolean> {
+    const appName = brandingStore.getName('hi');
+    const title = params.callerName ? `${params.callerName} — ${appName}` : appName;
+    const body = 'मिस्ड इंटरनेट कॉल (Missed call)';
+
+    const chatUrl = params.conversationId
+      ? `/#chat?c=${encodeURIComponent(params.conversationId)}&u=${encodeURIComponent(params.callerId)}`
+      : '/#messages';
+
+    return await this.sendPushNotification({
+      recipientId: params.recipientId,
+      title,
+      body,
+      icon: params.callerPhoto || '/pwa-192x192.png',
+      badge: '/favicon.ico',
+      tag: `missed_call_${params.callId}`,
+      data: {
+        type: 'missed_call',
+        callId: params.callId,
+        callerId: params.callerId,
+        callerName: params.callerName,
+        conversationId: params.conversationId,
+        url: chatUrl,
+      },
+    });
+  }
+
+  /**
+   * Dismiss active incoming call notification from screen / service worker
+   */
+  static async dismissCallNotification(callId: string, recipientId?: string): Promise<void> {
+    try {
+      // 1. Local service worker dismissal
+      if (typeof navigator !== 'undefined' && 'serviceWorker' in navigator && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({
+          type: 'CLOSE_CALL_NOTIFICATION',
+          callId,
+        });
+      }
+
+      // 2. Remote push dismissal
+      if (recipientId) {
+        fetch('/api/push/close', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ recipientId, callId }),
+        }).catch(() => {});
+      }
+    } catch {}
   }
 
   /**
