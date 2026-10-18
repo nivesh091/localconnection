@@ -228,7 +228,11 @@ export const WorkerQRCodeModal: React.FC<WorkerQRCodeModalProps> = ({
     }
 
     const waUrl = `https://api.whatsapp.com/send?text=${encodeURIComponent(shareText)}`;
-    window.open(waUrl, '_blank', 'noopener,noreferrer');
+    const a = document.createElement('a');
+    a.href = waUrl;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.click();
   };
 
   // Handle Direct Print

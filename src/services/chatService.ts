@@ -2,6 +2,7 @@ import { supabase, isSchemaCacheError, withNetworkRetry, isNetworkError } from '
 import { safeStorage } from '../lib/storage';
 import { ChatIndexedDB, ConversationSnapshot } from '../lib/chatIndexedDB';
 import { Conversation, Message, MessageType, UserProfile, CommentReference } from '../types';
+import { CallRecord } from '../types/calling';
 import { MediaService } from './mediaService';
 
 export const ADMIN_USER_ID = '18aa47ec-9ecc-4c2e-ae51-e29f92dc9a72';
@@ -37,6 +38,10 @@ export function invalidateChatCaches(userId?: string) {
 }
 
 export class ChatService {
+  public static invalidateConversationsCache(userId?: string): void {
+    invalidateChatCaches(userId);
+  }
+
   private static getDeletedConversationsMap(userId: string): Map<string, string> {
     try {
       const raw = safeStorage.getItem(`kaammitra_deleted_convs_${userId}`);
@@ -284,8 +289,8 @@ export class ChatService {
         const convIds = convItems.map((item) => item.id);
         const unreadCountMap: Record<string, number> = {};
 
-        // Run unread counts and latest messages in parallel
-        const [unreadRes, latestMsgResults] = await Promise.all([
+        // Run unread counts, latest messages, and user's calls in parallel
+        const [unreadRes, latestMsgResults, callsRes] = await Promise.all([
           convIds.length > 0
             ? supabase
                 .from('messages')
@@ -305,11 +310,70 @@ export class ChatService {
                 .maybeSingle()
             )
           ),
+          supabase
+            .from('calls')
+            .select('*')
+            .or(`caller_id.eq.${userId},receiver_id.eq.${userId}`)
+            .order('created_at', { ascending: false })
+            .limit(50),
         ]);
 
         if (unreadRes.data) {
           for (const r of unreadRes.data) {
             unreadCountMap[r.conversation_id] = (unreadCountMap[r.conversation_id] || 0) + 1;
+          }
+        }
+
+        // Filter out calls that the current user deleted from their view
+        const getDeletedCallIds = (uid: string): Set<string> => {
+          try {
+            const raw = safeStorage.getItem(`km_deleted_calls_${uid}`);
+            if (!raw) return new Set();
+            const arr = JSON.parse(raw);
+            return new Set(Array.isArray(arr) ? arr : []);
+          } catch {
+            return new Set();
+          }
+        };
+
+        const rawCalls = (callsRes?.data || []) as CallRecord[];
+        const deletedCallSet = getDeletedCallIds(userId);
+        const activeCalls = rawCalls.filter((c) => !deletedCallSet.has(c.id));
+
+        const latestCallByOtherUser = new Map<string, CallRecord>();
+        for (const c of activeCalls) {
+          const otherId = c.caller_id === userId ? c.receiver_id : c.caller_id;
+          if (otherId && !latestCallByOtherUser.has(otherId)) {
+            latestCallByOtherUser.set(otherId, c);
+          }
+        }
+
+        // If user called or received a call from someone who doesn't have a conversation row yet, ensure it exists
+        for (const [otherId] of latestCallByOtherUser.entries()) {
+          const hasConv = convItems.some(
+            (item) => item.user_1_id === otherId || item.user_2_id === otherId
+          );
+          if (!hasConv) {
+            try {
+              const { data: convRow } = await supabase
+                .from('conversations')
+                .select(`
+                  id,
+                  user_1_id,
+                  user_2_id,
+                  last_message_at,
+                  created_at,
+                  updated_at,
+                  user1:profiles!conversations_user_1_id_fkey(id, name, profile_photo, mobile),
+                  user2:profiles!conversations_user_2_id_fkey(id, name, profile_photo, mobile)
+                `)
+                .or(`and(user_1_id.eq.${userId},user_2_id.eq.${otherId}),and(user_1_id.eq.${otherId},user_2_id.eq.${userId})`)
+                .maybeSingle();
+
+              if (convRow) {
+                convItems.push(convRow);
+              }
+            } catch {}
           }
         }
 
@@ -368,7 +432,16 @@ export class ChatService {
           };
 
           const latestMsg = latestMsgResults[idx]?.data || null;
-          const latestTimestamp = latestMsg?.created_at || item.last_message_at || item.created_at;
+          const latestCall = latestCallByOtherUser.get(targetOtherId);
+
+          const msgTime = latestMsg?.created_at ? new Date(latestMsg.created_at).getTime() : 0;
+          const callTime = latestCall ? new Date(latestCall.started_at || latestCall.created_at).getTime() : 0;
+          const fallbackTime = new Date(item.last_message_at || item.created_at).getTime();
+
+          const latestTimestamp =
+            callTime > msgTime && callTime > fallbackTime
+              ? (latestCall?.started_at || latestCall?.created_at || item.last_message_at)
+              : (latestMsg?.created_at || item.last_message_at || item.created_at);
 
           return {
             id: item.id,
@@ -379,6 +452,7 @@ export class ChatService {
             updated_at: item.updated_at,
             other_user: other,
             latest_message: latestMsg || undefined,
+            latest_call: latestCall || undefined,
             unread_count: unreadCountMap[item.id] || 0,
           };
         });
@@ -387,14 +461,26 @@ export class ChatService {
         const filteredList = list.filter((conv) => {
           if (!deletedMap.has(conv.id)) return true;
           const deletedAt = new Date(deletedMap.get(conv.id)!).getTime();
-          const lastActivityTime = new Date(conv.latest_message?.created_at || conv.last_message_at || conv.created_at).getTime();
+          const lastMsgTime = conv.latest_message ? new Date(conv.latest_message.created_at).getTime() : 0;
+          const lastCallTime = conv.latest_call ? new Date(conv.latest_call.started_at || conv.latest_call.created_at).getTime() : 0;
+          const lastActivityTime = Math.max(
+            lastMsgTime,
+            lastCallTime,
+            new Date(conv.last_message_at || conv.created_at).getTime()
+          );
           return lastActivityTime > deletedAt;
         });
 
-        // Sort by most recent activity timestamp DESC (latest message timestamp first)
+        // Sort by most recent activity timestamp DESC (latest message timestamp or call timestamp first)
         filteredList.sort((a, b) => {
-          const timeA = new Date(a.latest_message?.created_at || a.last_message_at || a.created_at).getTime();
-          const timeB = new Date(b.latest_message?.created_at || b.last_message_at || b.created_at).getTime();
+          const timeA = Math.max(
+            new Date(a.latest_message?.created_at || a.last_message_at || a.created_at).getTime(),
+            a.latest_call ? new Date(a.latest_call.started_at || a.latest_call.created_at).getTime() : 0
+          );
+          const timeB = Math.max(
+            new Date(b.latest_message?.created_at || b.last_message_at || b.created_at).getTime(),
+            b.latest_call ? new Date(b.latest_call.started_at || b.latest_call.created_at).getTime() : 0
+          );
           return timeB - timeA;
         });
 

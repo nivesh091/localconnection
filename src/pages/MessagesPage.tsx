@@ -9,6 +9,10 @@ import {
   Bell,
   X,
   Loader2,
+  PhoneIncoming,
+  PhoneOutgoing,
+  PhoneMissed,
+  PhoneOff,
 } from 'lucide-react';
 import { Conversation, UserNotification } from '../types';
 import { supabase } from '../lib/supabase';
@@ -214,6 +218,20 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
             table: 'messages',
           },
           async () => {
+            ChatService.invalidateConversationsCache(userId);
+            const list = await ChatService.getConversations(userId);
+            setConversations(list);
+          }
+        )
+        .on(
+          'postgres_changes',
+          {
+            event: '*',
+            schema: 'public',
+            table: 'calls',
+          },
+          async () => {
+            ChatService.invalidateConversationsCache(userId);
             const list = await ChatService.getConversations(userId);
             setConversations(list);
           }
@@ -364,10 +382,20 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
     return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
 
-  // All conversations (including Admin) sorted according to existing sorting rules by most recent activity timestamp
+  // All conversations (including Admin) sorted by most recent activity timestamp (latest message or call event)
   const allSortedConvs = [...conversations].sort((a, b) => {
-    const timeA = new Date(a.latest_message?.created_at || a.last_message_at || a.created_at).getTime();
-    const timeB = new Date(b.latest_message?.created_at || b.last_message_at || b.created_at).getTime();
+    const timeA = Math.max(
+      a.latest_message?.created_at ? new Date(a.latest_message.created_at).getTime() : 0,
+      a.latest_call ? new Date(a.latest_call.started_at || a.latest_call.created_at).getTime() : 0,
+      a.last_message_at ? new Date(a.last_message_at).getTime() : 0,
+      a.created_at ? new Date(a.created_at).getTime() : 0
+    );
+    const timeB = Math.max(
+      b.latest_message?.created_at ? new Date(b.latest_message.created_at).getTime() : 0,
+      b.latest_call ? new Date(b.latest_call.started_at || b.latest_call.created_at).getTime() : 0,
+      b.last_message_at ? new Date(b.last_message_at).getTime() : 0,
+      b.created_at ? new Date(b.created_at).getTime() : 0
+    );
     return timeB - timeA;
   });
 
@@ -523,8 +551,52 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
               : other?.name || 'उपयोगकर्ता';
             const photo = other?.profile_photo;
             const firstLetter = name.trim().charAt(0).toUpperCase();
-            const lastMsgText =
-              c.latest_message?.deleted_for_everyone
+
+            const latestMsgTime = c.latest_message?.created_at ? new Date(c.latest_message.created_at).getTime() : 0;
+            const latestCallTime = c.latest_call ? new Date(c.latest_call.started_at || c.latest_call.created_at).getTime() : 0;
+            const isCallLatest = latestCallTime > latestMsgTime && Boolean(c.latest_call);
+            const effectiveTime = isCallLatest
+              ? (c.latest_call?.started_at || c.latest_call?.created_at || c.last_message_at)
+              : (c.latest_message?.created_at || c.last_message_at);
+
+            let lastMsgNode: React.ReactNode = 'नई बातचीत';
+            if (isCallLatest && c.latest_call) {
+              const call = c.latest_call;
+              const isCaller = call.caller_id === user?.id;
+              const isMissed = call.status === 'missed';
+              const isRejected = call.status === 'rejected';
+
+              if (isMissed) {
+                lastMsgNode = (
+                  <span className="text-rose-600 font-semibold flex items-center gap-1.5">
+                    <PhoneMissed className="w-3.5 h-3.5 text-rose-500 shrink-0" />
+                    <span>{isCaller ? 'अनुत्तरित कॉल (Unanswered)' : 'मिस्ड कॉल (Missed Call)'}</span>
+                  </span>
+                );
+              } else if (isRejected) {
+                lastMsgNode = (
+                  <span className="text-slate-600 flex items-center gap-1.5">
+                    <PhoneOff className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                    <span>कॉल अस्वीकार की गई</span>
+                  </span>
+                );
+              } else if (isCaller) {
+                lastMsgNode = (
+                  <span className="text-slate-600 flex items-center gap-1.5">
+                    <PhoneOutgoing className="w-3.5 h-3.5 text-teal-600 shrink-0" />
+                    <span>आउटगोइंग कॉल {call.duration_seconds > 0 ? `(${Math.floor(call.duration_seconds / 60)}m ${call.duration_seconds % 60}s)` : ''}</span>
+                  </span>
+                );
+              } else {
+                lastMsgNode = (
+                  <span className="text-slate-600 flex items-center gap-1.5">
+                    <PhoneIncoming className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                    <span>इनकमिंग कॉल {call.duration_seconds > 0 ? `(${Math.floor(call.duration_seconds / 60)}m ${call.duration_seconds % 60}s)` : ''}</span>
+                  </span>
+                );
+              }
+            } else {
+              lastMsgNode = c.latest_message?.deleted_for_everyone
                 ? 'यह मैसेज हटा दिया गया है।'
                 : c.latest_message?.message_type === 'voice'
                 ? '🎤 आवाज संदेश'
@@ -533,6 +605,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                 : c.latest_message?.message_type === 'location'
                 ? '📍 लोकेशन'
                 : c.latest_message?.message_text || 'नई बातचीत';
+            }
 
             const matchedSnippet = matchedMessageSnippets.get(c.id);
 
@@ -600,7 +673,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                     </div>
                     <div className="flex items-center gap-1.5 shrink-0 ml-1">
                       <span style={{ fontSize: '13px' }} className="text-slate-400 font-mono">
-                        {formatTime(c.last_message_at)}
+                        {formatTime(effectiveTime)}
                       </span>
                       {!!c.unread_count && c.unread_count > 0 && (
                         <span className="bg-emerald-600 text-white text-[11px] font-bold px-2 py-0.5 rounded-full min-w-5 text-center leading-tight shadow-xs">
@@ -610,9 +683,9 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
                     </div>
                   </div>
                   <div style={{ fontSize: '16px' }} className="flex flex-col gap-0.5 mt-1">
-                    <p style={{ fontSize: '15px' }} className={`truncate ${c.unread_count && c.unread_count > 0 ? 'text-slate-900 font-bold' : 'text-slate-600 font-normal'}`}>
-                      {lastMsgText}
-                    </p>
+                    <div style={{ fontSize: '15px' }} className={`truncate ${c.unread_count && c.unread_count > 0 ? 'text-slate-900 font-bold' : 'text-slate-600 font-normal'}`}>
+                      {lastMsgNode}
+                    </div>
                     {searchQuery.trim() && matchedSnippet && (
                       <p className="text-[12px] text-teal-700 font-medium truncate">
                         💬 &ldquo;{matchedSnippet}&rdquo;

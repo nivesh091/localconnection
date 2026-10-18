@@ -21,10 +21,13 @@ import {
   ShieldCheck,
   AlertCircle,
   HelpCircle,
+  RefreshCw,
+  X,
 } from 'lucide-react';
 import { useAuth } from './AuthContext';
 import { supabase } from '../lib/supabase';
 import { CallingService } from '../services/callingService';
+import { ChatService } from '../services/chatService';
 import { ringtoneService } from '../services/ringtoneService';
 import { CallAudioRecorder } from '../services/callAudioRecorder';
 import {
@@ -42,6 +45,7 @@ interface CallingContextType {
   isSpeaker: boolean;
   isPersonalRecording: boolean;
   isAdminRecordingActive: boolean;
+  isReconnecting: boolean;
   callDuration: number;
   startCall: (targetUser: UserProfile, conversationId?: string) => Promise<boolean>;
   answerCall: (consentAdminRecording: boolean) => Promise<void>;
@@ -67,8 +71,10 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [isSpeaker, setIsSpeaker] = useState(false);
   const [isPersonalRecording, setIsPersonalRecording] = useState(true);
   const [isAdminRecordingActive, setIsAdminRecordingActive] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const [callDuration, setCallDuration] = useState(0);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [showConnectingRefreshToast, setShowConnectingRefreshToast] = useState(false);
 
   // Guidelines modal
   const [showGuidelines, setShowGuidelines] = useState(false);
@@ -85,16 +91,23 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   activeCallRef.current = activeCall;
   const callStateRef = useRef<string>(callState);
   callStateRef.current = callState;
+  const isReconnectingRef = useRef<boolean>(false);
+  isReconnectingRef.current = isReconnecting;
+  const reconnectionTimeoutRef = useRef<any>(null);
+  const isRecoveringIceRef = useRef<boolean>(false);
 
   // ICE candidates queue to prevent "Remote description not set" errors
   const queuedCandidatesRef = useRef<RTCIceCandidateInit[]>([]);
+  const addedCandidatesRef = useRef<Set<string>>(new Set());
   const hasRemoteDescriptionRef = useRef<boolean>(false);
   const isConnectedRef = useRef<boolean>(false);
+  const terminatingCallIdRef = useRef<string | null>(null);
 
   // Timers & Channels
   const durationTimerRef = useRef<any>(null);
   const timeoutTimerRef = useRef<any>(null);
   const answerPollTimerRef = useRef<any>(null);
+  const connectingTimerRef = useRef<any>(null);
   const roomChannelRef = useRef<any>(null);
   const callTableChannelRef = useRef<any>(null);
   const isInitiatorRef = useRef<boolean>(false);
@@ -146,8 +159,35 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     };
   }, [user?.id]);
 
+  // 2. 10-second timer to suggest refresh if call remains in 'connecting' state without connecting
+  useEffect(() => {
+    if (callState === 'connecting') {
+      connectingTimerRef.current = setTimeout(() => {
+        if (callStateRef.current === 'connecting') {
+          console.warn('[WebRTC-Call] Call in connecting state >10s. Suggesting page refresh to user.');
+          setShowConnectingRefreshToast(true);
+        }
+      }, 10000);
+    } else {
+      if (connectingTimerRef.current) {
+        clearTimeout(connectingTimerRef.current);
+        connectingTimerRef.current = null;
+      }
+      setShowConnectingRefreshToast(false);
+    }
+
+    return () => {
+      if (connectingTimerRef.current) {
+        clearTimeout(connectingTimerRef.current);
+        connectingTimerRef.current = null;
+      }
+    };
+  }, [callState]);
+
   // Handle unanswered timeout
   const handleTimeout = async (callId: string) => {
+    if (terminatingCallIdRef.current === callId) return;
+    terminatingCallIdRef.current = callId;
     ringtoneService.stopAll();
     ringtoneService.playStatusBeep('ended');
     await CallingService.endCall({
@@ -176,6 +216,10 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     if (answerPollTimerRef.current) {
       clearInterval(answerPollTimerRef.current);
       answerPollTimerRef.current = null;
+    }
+    if (connectingTimerRef.current) {
+      clearTimeout(connectingTimerRef.current);
+      connectingTimerRef.current = null;
     }
 
     if (localStreamRef.current) {
@@ -207,11 +251,25 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
 
     queuedCandidatesRef.current = [];
+    addedCandidatesRef.current.clear();
     hasRemoteDescriptionRef.current = false;
     isConnectedRef.current = false;
+    terminatingCallIdRef.current = null;
+    setShowConnectingRefreshToast(false);
     setIsMuted(false);
     setIsSpeaker(false);
-  }, []);
+
+    if (reconnectionTimeoutRef.current) {
+      clearTimeout(reconnectionTimeoutRef.current);
+      reconnectionTimeoutRef.current = null;
+    }
+    isRecoveringIceRef.current = false;
+    setIsReconnecting(false);
+
+    if (user?.id) {
+      ChatService.invalidateConversationsCache(user.id);
+    }
+  }, [user?.id]);
 
   // Process queued ICE candidates once remote description is set
   const drainQueuedCandidates = useCallback(async (pc: RTCPeerConnection) => {
@@ -221,6 +279,9 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     while (queuedCandidatesRef.current.length > 0) {
       const candidateInit = queuedCandidatesRef.current.shift();
       if (candidateInit) {
+        const candKey = typeof candidateInit === 'string' ? candidateInit : JSON.stringify(candidateInit);
+        if (addedCandidatesRef.current.has(candKey)) continue;
+        addedCandidatesRef.current.add(candKey);
         try {
           await pc.addIceCandidate(new RTCIceCandidate(candidateInit));
           console.log('[WebRTC-Call] Successfully added queued ICE candidate');
@@ -241,6 +302,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     ringtoneService.playStatusBeep('connected');
     setCallState('connected');
 
+    // Update truthful call status in DB
+    if (activeCallRef.current) {
+      CallingService.markCallConnected(activeCallRef.current.id);
+    }
+
     if (timeoutTimerRef.current) {
       clearTimeout(timeoutTimerRef.current);
       timeoutTimerRef.current = null;
@@ -255,6 +321,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       durationTimerRef.current = setInterval(() => {
         setCallDuration((prev) => prev + 1);
       }, 1000);
+    }
+
+    // Ensure audio element is playing
+    if (audioElementRef.current && remoteStreamRef.current) {
+      audioElementRef.current.play().catch(() => {});
     }
 
     // Start recorder if personal or admin recording enabled
@@ -300,6 +371,74 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     [isPersonalRecording, isAdminRecordingActive, user?.id]
   );
 
+  // Automatic ICE reconnection attempt (without page reload)
+  const attemptIceRecovery = useCallback(async () => {
+    const pc = peerConnectionRef.current;
+    if (!pc || pc.connectionState === 'closed') return;
+    if (isRecoveringIceRef.current) return;
+    isRecoveringIceRef.current = true;
+
+    console.log('[WebRTC-Call] Attempting automatic WebRTC ICE recovery...');
+    setIsReconnecting(true);
+
+    try {
+      if (typeof pc.restartIce === 'function') {
+        pc.restartIce();
+      }
+
+      if (isInitiatorRef.current && activeCallRef.current && user?.id) {
+        const targetUserId = otherParticipant?.id || activeCallRef.current.receiver_id;
+        const offer = await pc.createOffer({
+          iceRestart: true,
+          offerToReceiveAudio: true,
+        });
+        await pc.setLocalDescription(offer);
+        console.log('[WebRTC-Call] Created ICE restart offer, broadcasting signal');
+
+        CallingService.sendSignal(
+          {
+            call_id: activeCallRef.current.id,
+            sender_id: user.id,
+            recipient_id: targetUserId,
+            type: 'offer',
+            payload: offer,
+          },
+          roomChannelRef.current
+        );
+      }
+    } catch (err) {
+      console.warn('[WebRTC-Call] ICE restart attempt error:', err);
+    } finally {
+      setTimeout(() => {
+        isRecoveringIceRef.current = false;
+      }, 3000);
+    }
+  }, [user?.id, otherParticipant?.id]);
+
+  // Browser online/offline event handlers to recover active WebRTC connection
+  useEffect(() => {
+    const handleBrowserOffline = () => {
+      if (callStateRef.current === 'connected' || callStateRef.current === 'connecting') {
+        console.log('[WebRTC-Call] Browser offline during call. Showing reconnecting state.');
+        setIsReconnecting(true);
+      }
+    };
+
+    const handleBrowserOnline = () => {
+      if (callStateRef.current === 'connected' || callStateRef.current === 'connecting') {
+        console.log('[WebRTC-Call] Browser back online. Attempting automatic recovery...');
+        attemptIceRecovery();
+      }
+    };
+
+    window.addEventListener('offline', handleBrowserOffline);
+    window.addEventListener('online', handleBrowserOnline);
+    return () => {
+      window.removeEventListener('offline', handleBrowserOffline);
+      window.removeEventListener('online', handleBrowserOnline);
+    };
+  }, [attemptIceRecovery]);
+
   // Initialize WebRTC Peer Connection
   const setupPeerConnection = useCallback(
     (callId: string, peerUserId: string) => {
@@ -332,6 +471,16 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           remoteStream = new MediaStream([event.track]);
         }
         remoteStreamRef.current = remoteStream;
+
+        if (event.track) {
+          event.track.enabled = true;
+          event.track.onunmute = () => {
+            console.log('[WebRTC-Call] Remote audio track unmuted, ensuring audio element is playing');
+            if (audioElementRef.current) {
+              audioElementRef.current.play().catch(() => {});
+            }
+          };
+        }
 
         const audioEl = audioElementRef.current;
         if (audioEl) {
@@ -370,23 +519,73 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           pc.iceConnectionState === 'connected' ||
           pc.iceConnectionState === 'completed'
         ) {
+          if (reconnectionTimeoutRef.current) {
+            clearTimeout(reconnectionTimeoutRef.current);
+            reconnectionTimeoutRef.current = null;
+          }
+          setIsReconnecting(false);
           handleConnectionEstablished();
+        } else if (pc.iceConnectionState === 'disconnected') {
+          console.warn('[WebRTC-Call] iceConnectionState disconnected - entering reconnection state');
+          setIsReconnecting(true);
+          // Set a safe 20s recovery timeout before concluding permanent failure
+          if (!reconnectionTimeoutRef.current) {
+            reconnectionTimeoutRef.current = setTimeout(() => {
+              if (
+                peerConnectionRef.current &&
+                (peerConnectionRef.current.iceConnectionState === 'disconnected' ||
+                  peerConnectionRef.current.iceConnectionState === 'failed')
+              ) {
+                console.warn('[WebRTC-Call] ICE reconnection timeout (20s) reached');
+                setErrorMessage('नेटवर्क कनेक्शन टूट गया (Connection lost after timeout)');
+                setIsReconnecting(false);
+                endCall();
+              }
+            }, 20000);
+          }
+          attemptIceRecovery();
         } else if (pc.iceConnectionState === 'failed') {
           console.warn('[WebRTC-Call] iceConnectionState failed');
-          if (callStateRef.current === 'connected') {
-            endCall();
+          setIsReconnecting(true);
+          if (!reconnectionTimeoutRef.current) {
+            reconnectionTimeoutRef.current = setTimeout(() => {
+              if (
+                peerConnectionRef.current &&
+                peerConnectionRef.current.iceConnectionState === 'failed'
+              ) {
+                setErrorMessage('नेटवर्क त्रुटि के कारण कॉल समाप्त हुई (Call failed due to network error)');
+                setIsReconnecting(false);
+                endCall();
+              }
+            }, 12000);
           }
+          attemptIceRecovery();
         }
       };
 
       pc.onconnectionstatechange = () => {
         console.log('[WebRTC-Call] connectionState changed:', pc.connectionState);
         if (pc.connectionState === 'connected') {
+          if (reconnectionTimeoutRef.current) {
+            clearTimeout(reconnectionTimeoutRef.current);
+            reconnectionTimeoutRef.current = null;
+          }
+          setIsReconnecting(false);
           handleConnectionEstablished();
+        } else if (pc.connectionState === 'disconnected') {
+          console.warn('[WebRTC-Call] connectionState disconnected');
+          setIsReconnecting(true);
+          attemptIceRecovery();
         } else if (pc.connectionState === 'failed') {
           console.warn('[WebRTC-Call] Peer connection failed');
-          if (callStateRef.current === 'connected') {
-            endCall();
+          if (!reconnectionTimeoutRef.current) {
+            reconnectionTimeoutRef.current = setTimeout(() => {
+              if (peerConnectionRef.current?.connectionState === 'failed') {
+                setErrorMessage('कॉल कनेक्शन विफल (Call connection failed)');
+                setIsReconnecting(false);
+                endCall();
+              }
+            }, 10000);
           }
         }
       };
@@ -395,6 +594,37 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       return pc;
     },
     [user?.id, handleConnectionEstablished]
+  );
+
+  // Peer-initiated hangup (Idempotent local teardown without triggering recursive signal loop)
+  const handlePeerHangup = useCallback(
+    async (callId: string) => {
+      if (terminatingCallIdRef.current === callId) {
+        console.log('[WebRTC-Call] Call already terminating for:', callId, 'skipping duplicate peer hangup');
+        return;
+      }
+      terminatingCallIdRef.current = callId;
+      console.log('[WebRTC-Call] Processing peer hangup for call:', callId);
+
+      ringtoneService.stopAll();
+      ringtoneService.playStatusBeep('ended');
+      setCallState('ended');
+
+      const duration = callDuration;
+
+      // Upload personal recording if active
+      await finishAndUploadRecording(callId, duration);
+
+      setTimeout(() => {
+        cleanupCall();
+        setCallState('idle');
+        setActiveCall(null);
+        setCallDuration(0);
+        setOtherParticipant(null);
+        setIsAdminRecordingActive(false);
+      }, 1200);
+    },
+    [callDuration, finishAndUploadRecording, cleanupCall]
   );
 
   // Setup Realtime Room Signaling Channel
@@ -424,7 +654,19 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
               // Receiver receives offer
               console.log('[WebRTC-Call] Setting remote description with received offer');
               await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+              hasRemoteDescriptionRef.current = true;
               await drainQueuedCandidates(pc);
+
+              // Also fetch any candidates caller already stored in DB
+              const dbCandidates = await CallingService.getIceCandidates(callId, peerUserId);
+              for (const cand of dbCandidates) {
+                const candKey = typeof cand === 'string' ? cand : JSON.stringify(cand);
+                if (addedCandidatesRef.current.has(candKey)) continue;
+                addedCandidatesRef.current.add(candKey);
+                try {
+                  await pc.addIceCandidate(new RTCIceCandidate(cand));
+                } catch {}
+              }
 
               const answer = await pc.createAnswer();
               await pc.setLocalDescription(answer);
@@ -448,14 +690,29 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                 !pc.remoteDescription
               ) {
                 await pc.setRemoteDescription(new RTCSessionDescription(signal.payload));
+                hasRemoteDescriptionRef.current = true;
                 await drainQueuedCandidates(pc);
+
+                const rxCandidates = await CallingService.getIceCandidates(callId, peerUserId);
+                for (const c of rxCandidates) {
+                  const candKey = typeof c === 'string' ? c : JSON.stringify(c);
+                  if (addedCandidatesRef.current.has(candKey)) continue;
+                  addedCandidatesRef.current.add(candKey);
+                  try {
+                    await pc.addIceCandidate(new RTCIceCandidate(c));
+                  } catch {}
+                }
               }
             } else if (signal.type === 'ice_candidate') {
               if (hasRemoteDescriptionRef.current && pc.remoteDescription) {
-                try {
-                  await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
-                } catch (candidateErr) {
-                  console.warn('[WebRTC-Call] addIceCandidate error:', candidateErr);
+                const candKey = typeof signal.payload === 'string' ? signal.payload : JSON.stringify(signal.payload);
+                if (!addedCandidatesRef.current.has(candKey)) {
+                  addedCandidatesRef.current.add(candKey);
+                  try {
+                    await pc.addIceCandidate(new RTCIceCandidate(signal.payload));
+                  } catch (candidateErr) {
+                    console.warn('[WebRTC-Call] addIceCandidate error:', candidateErr);
+                  }
                 }
               } else {
                 queuedCandidatesRef.current.push(signal.payload);
@@ -471,9 +728,9 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                 setCallState('idle');
                 setActiveCall(null);
               }, 2000);
-            } else if (signal.type === 'ended') {
+            } else if (signal.type === 'ended' || signal.type === 'end') {
               console.log('[WebRTC-Call] Peer ended call');
-              endCall();
+              handlePeerHangup(callId);
             }
           } catch (err) {
             console.error('[WebRTC-Call] Signaling processing error:', err);
@@ -491,11 +748,15 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                   try {
                     console.log('[WebRTC-Call] Applying Offer retrieved from DB fallback');
                     await pc.setRemoteDescription(new RTCSessionDescription(dbOffer));
+                    hasRemoteDescriptionRef.current = true;
                     
                     // Also fetch caller's existing ICE candidates from DB
                     const existingCandidates = await CallingService.getIceCandidates(callId, peerUserId);
                     console.log('[WebRTC-Call] Fetched caller ICE candidates from DB, count:', existingCandidates.length);
                     for (const cand of existingCandidates) {
+                      const candKey = typeof cand === 'string' ? cand : JSON.stringify(cand);
+                      if (addedCandidatesRef.current.has(candKey)) continue;
+                      addedCandidatesRef.current.add(candKey);
                       try {
                         await pc.addIceCandidate(new RTCIceCandidate(cand));
                       } catch {}
@@ -541,19 +802,31 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
             const updated = payload.new as CallRecord;
             console.log('[WebRTC-Call] Database call status update:', updated?.status);
             if (updated) {
-              if (updated.status === 'connected') {
-                // If caller sees call is connected on server, check for Answer in DB
+              if (updated.status === 'connecting' || updated.status === 'connected') {
+                if (isInitiatorRef.current) {
+                  ringtoneService.stopAll();
+                  if (updated.status === 'connected') {
+                    handleConnectionEstablished();
+                  } else if (callStateRef.current === 'calling') {
+                    setCallState('connecting');
+                  }
+                }
+                // If caller sees call is connecting/connected on server, check for Answer in DB
                 if (isInitiatorRef.current && peerConnectionRef.current) {
                   const pc = peerConnectionRef.current;
                   if (!pc.remoteDescription) {
                     const dbAnswer = await CallingService.getAnswerSignal(callId);
                     if (dbAnswer) {
-                      console.log('[WebRTC-Call] Applying Answer retrieved from DB on connected status');
+                      console.log('[WebRTC-Call] Applying Answer retrieved from DB on status update');
                       await pc.setRemoteDescription(new RTCSessionDescription(dbAnswer));
+                      hasRemoteDescriptionRef.current = true;
                       
                       // Fetch receiver's ICE candidates
                       const rxCandidates = await CallingService.getIceCandidates(callId, peerUserId);
                       for (const c of rxCandidates) {
+                        const candKey = typeof c === 'string' ? c : JSON.stringify(c);
+                        if (addedCandidatesRef.current.has(candKey)) continue;
+                        addedCandidatesRef.current.add(candKey);
                         try {
                           await pc.addIceCandidate(new RTCIceCandidate(c));
                         } catch {}
@@ -561,6 +834,9 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                       await drainQueuedCandidates(pc);
                     }
                   }
+                }
+                if (updated.status === 'connected') {
+                  handleConnectionEstablished();
                 }
               } else if (updated.status === 'rejected') {
                 ringtoneService.stopAll();
@@ -573,7 +849,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                   setActiveCall(null);
                 }, 2000);
               } else if (updated.status === 'ended') {
-                endCall();
+                handlePeerHangup(callId);
               }
             }
           }
@@ -582,7 +858,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
 
       callTableChannelRef.current = callTableChannel;
     },
-    [user?.id, cleanupCall, drainQueuedCandidates]
+    [user?.id, cleanupCall, drainQueuedCandidates, handlePeerHangup]
   );
 
   // START OUTGOING CALL
@@ -604,6 +880,13 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       hasRemoteDescriptionRef.current = false;
       ringtoneService.startOutgoingTone();
 
+      // Prime audio playback capability within user gesture context
+      if (audioElementRef.current) {
+        audioElementRef.current.muted = false;
+        audioElementRef.current.volume = 1.0;
+        audioElementRef.current.play().catch(() => {});
+      }
+
       // 1. Request microphone permission
       let localStream: MediaStream;
       try {
@@ -615,7 +898,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           },
           video: false,
         });
+        localStream.getAudioTracks().forEach((track) => {
+          track.enabled = true;
+        });
         localStreamRef.current = localStream;
+        setIsMuted(false);
         console.log('[WebRTC-Call] Microphone access granted, audio tracks:', localStream.getAudioTracks().length);
       } catch (err: any) {
         console.error('[WebRTC-Call] Microphone access denied or error:', err);
@@ -695,8 +982,12 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           console.log('[WebRTC-Call] Periodic poll retrieved answer from DB, applying remote description');
           try {
             await peerConnectionRef.current.setRemoteDescription(new RTCSessionDescription(dbAnswer));
+            hasRemoteDescriptionRef.current = true;
             const rxCandidates = await CallingService.getIceCandidates(newCall.id, targetUser.id);
             for (const c of rxCandidates) {
+              const candKey = typeof c === 'string' ? c : JSON.stringify(c);
+              if (addedCandidatesRef.current.has(candKey)) continue;
+              addedCandidatesRef.current.add(candKey);
               try {
                 await peerConnectionRef.current.addIceCandidate(new RTCIceCandidate(c));
               } catch {}
@@ -745,6 +1036,13 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     hasRemoteDescriptionRef.current = false;
     isConnectedRef.current = false;
 
+    // Prime audio playback capability within user gesture context
+    if (audioElementRef.current) {
+      audioElementRef.current.muted = false;
+      audioElementRef.current.volume = 1.0;
+      audioElementRef.current.play().catch(() => {});
+    }
+
     try {
       // 1. Request microphone permission
       const localStream = await navigator.mediaDevices.getUserMedia({
@@ -755,7 +1053,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         },
         video: false,
       });
+      localStream.getAudioTracks().forEach((track) => {
+        track.enabled = true;
+      });
       localStreamRef.current = localStream;
+      setIsMuted(false);
       console.log('[WebRTC-Call] Receiver mic access granted');
 
       // 2. Answer call on server
@@ -763,6 +1065,24 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         callId: activeCall.id,
         receiverConsentAdminRecording: consentAdminRecording,
       });
+
+      if (!answerRes.success) {
+        console.error('[WebRTC-Call] answerCall failed on server:', answerRes.error);
+        if (localStreamRef.current) {
+          localStreamRef.current.getTracks().forEach((t) => t.stop());
+          localStreamRef.current = null;
+        }
+        ringtoneService.stopAll();
+        ringtoneService.playStatusBeep('ended');
+        setCallState('ended');
+        setErrorMessage(answerRes.error || 'कॉल स्वीकार करने में विफल (Failed to answer call)');
+        setTimeout(() => {
+          cleanupCall();
+          setCallState('idle');
+          setActiveCall(null);
+        }, 2000);
+        return;
+      }
 
       if (answerRes.adminRecordingActive) {
         setIsAdminRecordingActive(true);
@@ -795,8 +1115,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   // REJECT INCOMING CALL
   const rejectCall = async () => {
     if (!activeCall) return;
+    const callId = activeCall.id;
+    if (terminatingCallIdRef.current === callId) return;
+    terminatingCallIdRef.current = callId;
 
-    console.log('[WebRTC-Call] Rejecting call:', activeCall.id);
+    console.log('[WebRTC-Call] Rejecting call:', callId);
     ringtoneService.stopAll();
     ringtoneService.playStatusBeep('ended');
 
@@ -805,13 +1128,13 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       timeoutTimerRef.current = null;
     }
 
-    await CallingService.rejectCall(activeCall.id);
+    await CallingService.rejectCall(callId);
 
     // Broadcast rejected signal
     if (user?.id) {
       CallingService.sendSignal(
         {
-          call_id: activeCall.id,
+          call_id: callId,
           sender_id: user.id,
           recipient_id: activeCall.caller_id,
           type: 'rejected',
@@ -834,12 +1157,18 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       return;
     }
 
-    console.log('[WebRTC-Call] Ending active call:', activeCall.id);
+    const callId = activeCall.id;
+    if (terminatingCallIdRef.current === callId) {
+      console.log('[WebRTC-Call] Call already terminating for:', callId);
+      return;
+    }
+    terminatingCallIdRef.current = callId;
+
+    console.log('[WebRTC-Call] Ending active call:', callId);
     ringtoneService.stopAll();
     ringtoneService.playStatusBeep('ended');
 
     const duration = callDuration;
-    const callId = activeCall.id;
 
     // Send end signal to peer
     if (user?.id) {
@@ -853,7 +1182,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           sender_id: user.id,
           recipient_id: recipientId,
           type: 'ended',
-          payload: {},
+          payload: { reason: isInitiatorRef.current ? 'caller_ended' : 'receiver_ended' },
         },
         roomChannelRef.current
       );
@@ -882,36 +1211,98 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     }, 1200);
   };
 
-  // Mute / Unmute
+  // Mute / Unmute: Derived directly from current participant's own local microphone tracks
   const toggleMute = () => {
-    if (!localStreamRef.current) return;
-    const audioTrack = localStreamRef.current.getAudioTracks()[0];
-    if (audioTrack) {
-      audioTrack.enabled = !audioTrack.enabled;
-      setIsMuted(!audioTrack.enabled);
+    const localTracks: MediaStreamTrack[] = [];
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach((track) => {
+        if (!localTracks.includes(track)) localTracks.push(track);
+      });
     }
+    if (peerConnectionRef.current) {
+      peerConnectionRef.current.getSenders().forEach((sender) => {
+        if (sender.track && sender.track.kind === 'audio' && !localTracks.includes(sender.track)) {
+          localTracks.push(sender.track);
+        }
+      });
+    }
+
+    if (localTracks.length === 0) {
+      console.warn('[WebRTC-Call] No local audio tracks found to toggle mute');
+      return;
+    }
+
+    // Toggle: if any track is enabled, mute all. Otherwise unmute all.
+    const isCurrentlyActive = localTracks.some((t) => t.enabled);
+    const newEnabledState = !isCurrentlyActive;
+
+    localTracks.forEach((track) => {
+      track.enabled = newEnabledState;
+    });
+
+    setIsMuted(!newEnabledState);
+    console.log('[WebRTC-Call] Toggled local microphone. isMuted:', !newEnabledState);
   };
 
-  // Speaker / Hands-free
+  // Speaker / Hands-free: Toggles local audio output without affecting remote participant
   const toggleSpeaker = async () => {
-    if (!audioElementRef.current) return;
+    const nextSpeaker = !isSpeaker;
     const el = audioElementRef.current as any;
-    if (typeof el.setSinkId === 'function') {
+
+    if (el && typeof el.setSinkId === 'function') {
       try {
-        const nextSpeaker = !isSpeaker;
-        await el.setSinkId(nextSpeaker ? 'speaker' : 'default');
-        setIsSpeaker(nextSpeaker);
-      } catch {
-        setIsSpeaker(!isSpeaker);
+        if (typeof navigator !== 'undefined' && navigator.mediaDevices && typeof navigator.mediaDevices.enumerateDevices === 'function') {
+          const devices = await navigator.mediaDevices.enumerateDevices();
+          const audioOutputs = devices.filter((d) => d.kind === 'audiooutput');
+          if (nextSpeaker) {
+            const speakerDevice = audioOutputs.find(
+              (d) =>
+                d.deviceId !== 'default' &&
+                (d.label.toLowerCase().includes('speaker') ||
+                  d.label.toLowerCase().includes('hands-free') ||
+                  d.label.toLowerCase().includes('loudspeaker'))
+            );
+            if (speakerDevice?.deviceId) {
+              await el.setSinkId(speakerDevice.deviceId);
+            }
+          } else {
+            const defaultDevice = audioOutputs.find(
+              (d) => d.deviceId === 'default' || d.label.toLowerCase().includes('earpiece')
+            );
+            await el.setSinkId(defaultDevice?.deviceId || '');
+          }
+        }
+      } catch (sinkErr) {
+        console.warn('[WebRTC-Call] setSinkId notice:', sinkErr);
       }
-    } else {
-      setIsSpeaker(!isSpeaker);
     }
+
+    setIsSpeaker(nextSpeaker);
+    if (el) {
+      el.volume = nextSpeaker ? 1.0 : 0.8;
+    }
+    console.log('[WebRTC-Call] Toggled speaker mode, isSpeaker:', nextSpeaker);
   };
 
-  // Personal Recording toggle
+  // Personal Recording toggle: Independent control for both Caller and Receiver
   const togglePersonalRecording = () => {
-    setIsPersonalRecording((prev) => !prev);
+    setIsPersonalRecording((prev) => {
+      const next = !prev;
+      console.log('[WebRTC-Call] Toggled personal recording, next state:', next);
+      if (callStateRef.current === 'connected') {
+        if (next) {
+          if (!recorderRef.current) recorderRef.current = new CallAudioRecorder();
+          if (!recorderRef.current.isRecording()) {
+            recorderRef.current.start(localStreamRef.current, remoteStreamRef.current);
+          }
+        } else if (!isAdminRecordingActive) {
+          if (recorderRef.current && recorderRef.current.isRecording()) {
+            recorderRef.current.stop();
+          }
+        }
+      }
+      return next;
+    });
   };
 
   // Format MM:SS
@@ -930,6 +1321,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         isSpeaker,
         isPersonalRecording,
         isAdminRecordingActive,
+        isReconnecting,
         callDuration,
         startCall,
         answerCall,
@@ -948,6 +1340,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         ref={audioElementRef}
         autoPlay
         playsInline
+        muted={false}
         aria-hidden="true"
         className="fixed -top-full -left-full w-1 h-1 opacity-0 pointer-events-none"
       />
@@ -1157,34 +1550,54 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                 </div>
               )}
 
+              {/* Reconnection Status Banner (Auto-recovery without page refresh) */}
+              {isReconnecting && (
+                <div className="w-full bg-amber-500/20 border border-amber-500/50 text-amber-200 text-xs p-3 rounded-2xl mb-4 flex items-center justify-center gap-2.5 text-center animate-pulse">
+                  <RefreshCw className="w-4 h-4 text-amber-400 shrink-0 animate-spin" />
+                  <span className="text-[11px] font-semibold leading-snug">
+                    नेटवर्क रुकावट — पुनः कनेक्ट किया जा रहा है... (Reconnecting...)
+                  </span>
+                </div>
+              )}
+
+              {/* Informative connecting notice if initial connection takes >10s */}
+              {showConnectingRefreshToast && callState === 'connecting' && !isReconnecting && (
+                <div className="w-full bg-slate-800/90 border border-slate-700 text-slate-300 text-xs p-3 rounded-2xl mb-4 flex items-center justify-center gap-2 text-center animate-in fade-in duration-150">
+                  <RefreshCw className="w-3.5 h-3.5 text-teal-400 shrink-0 animate-spin" />
+                  <span className="text-[11px]">
+                    सिग्नल स्थापित किया जा रहा है... कृपया प्रतीक्षा करें (Connecting...)
+                  </span>
+                </div>
+              )}
+
               {/* Call Control Buttons */}
               <div className="flex items-center justify-center gap-4 w-full mb-4">
-                {/* Mute Button */}
+                {/* Mute Button - Independent control for both Caller and Receiver */}
                 <button
                   type="button"
-                  disabled={callState !== 'connected'}
+                  disabled={callState !== 'connected' && callState !== 'connecting'}
                   onClick={toggleMute}
                   className={`w-12 h-12 rounded-full flex items-center justify-center transition cursor-pointer ${
                     isMuted
-                      ? 'bg-rose-500 text-white'
+                      ? 'bg-rose-500 text-white shadow-md shadow-rose-900/50'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                  } ${callState !== 'connected' ? 'opacity-40 cursor-not-allowed' : ''}`}
-                  title={isMuted ? 'अनम्यूट करें' : 'म्यूट करें'}
+                  } ${(callState !== 'connected' && callState !== 'connecting') ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  title={isMuted ? 'अनम्यूट करें (Unmute)' : 'म्यूट करें (Mute)'}
                 >
                   {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
                 </button>
 
-                {/* Speaker Button */}
+                {/* Speaker Button - Independent control for both Caller and Receiver */}
                 <button
                   type="button"
-                  disabled={callState !== 'connected'}
+                  disabled={callState !== 'connected' && callState !== 'connecting'}
                   onClick={toggleSpeaker}
                   className={`w-12 h-12 rounded-full flex items-center justify-center transition cursor-pointer ${
                     isSpeaker
-                      ? 'bg-teal-600 text-white'
+                      ? 'bg-teal-600 text-white shadow-md'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
-                  } ${callState !== 'connected' ? 'opacity-40 cursor-not-allowed' : ''}`}
-                  title="स्पीकर ऑन/ऑफ"
+                  } ${(callState !== 'connected' && callState !== 'connecting') ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  title={isSpeaker ? 'स्पीकर बंद करें (Speaker Off)' : 'स्पीकर चालू करें (Speaker On)'}
                 >
                   {isSpeaker ? (
                     <Volume2 className="w-5 h-5" />
@@ -1193,17 +1606,17 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                   )}
                 </button>
 
-                {/* Personal Recording Toggle Button */}
+                {/* Personal Recording Toggle Button - Independent control for both Caller and Receiver */}
                 <button
                   type="button"
-                  disabled={callState !== 'connected'}
+                  disabled={callState !== 'connected' && callState !== 'connecting'}
                   onClick={togglePersonalRecording}
                   className={`w-12 h-12 rounded-full flex items-center justify-center transition cursor-pointer ${
                     isPersonalRecording
                       ? 'bg-rose-900/60 border border-rose-500 text-rose-300'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-400'
-                  } ${callState !== 'connected' ? 'opacity-40 cursor-not-allowed' : ''}`}
-                  title="व्यक्तिगत रिकॉर्डिंग ऑन/ऑफ"
+                  } ${(callState !== 'connected' && callState !== 'connecting') ? 'opacity-40 cursor-not-allowed' : ''}`}
+                  title={isPersonalRecording ? 'व्यक्तिगत रिकॉर्डिंग बंद करें (Turn Off Recording)' : 'व्यक्तिगत रिकॉर्डिंग चालू करें (Turn On Recording)'}
                 >
                   <Disc className="w-5 h-5" />
                 </button>

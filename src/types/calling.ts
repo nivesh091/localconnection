@@ -77,6 +77,7 @@ export type SignalType =
   | 'ready'
   | 'ringing'
   | 'rejected'
+  | 'end'
   | 'ended'
   | 'ping';
 

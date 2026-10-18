@@ -98,6 +98,8 @@ export interface WorkerMedia {
   public_url?: string;
 }
 
+import type { CallRecord } from './calling';
+
 export interface Conversation {
   id: string;
   user_1_id: string;
@@ -107,6 +109,7 @@ export interface Conversation {
   updated_at: string;
   other_user?: UserProfile;
   latest_message?: Message;
+  latest_call?: CallRecord;
   unread_count?: number;
 }
 

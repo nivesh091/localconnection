@@ -8,6 +8,7 @@ import {
   SignalType,
 } from '../types/calling';
 import { safeStorage } from '../lib/storage';
+import { invalidateChatCaches } from './chatService';
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -18,6 +19,62 @@ const ICE_SERVERS: RTCIceServer[] = [
 ];
 
 export class CallingService {
+  /**
+   * Get set of call IDs deleted by a specific user from local persistent safeStorage
+   */
+  public static getDeletedCallIds(userId: string): Set<string> {
+    try {
+      const raw = safeStorage.getItem(`km_deleted_calls_${userId}`);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * Delete a call record for the current user's view with authorization
+   */
+  public static async deleteCallForUser(callId: string, userId: string): Promise<boolean> {
+    try {
+      if (!callId || !userId) return false;
+
+      // 1. Verify user is either caller or receiver
+      const { data: call } = await supabase
+        .from('calls')
+        .select('id, caller_id, receiver_id')
+        .eq('id', callId)
+        .maybeSingle();
+
+      if (call && call.caller_id !== userId && call.receiver_id !== userId) {
+        console.warn('[CallingService] User unauthorized to delete call record:', callId);
+        return false;
+      }
+
+      // 2. Persist in user's deleted calls storage
+      const deletedSet = this.getDeletedCallIds(userId);
+      deletedSet.add(callId);
+      safeStorage.setItem(`km_deleted_calls_${userId}`, JSON.stringify(Array.from(deletedSet)));
+
+      // 3. Mark personal recording deleted if owned by this user
+      try {
+        await supabase
+          .from('call_recordings')
+          .update({ is_deleted_by_user: true })
+          .eq('call_id', callId)
+          .eq('user_id', userId);
+      } catch {}
+
+      // 4. Invalidate conversation caches so conversation list reflects removal
+      invalidateChatCaches(userId);
+
+      return true;
+    } catch (err) {
+      console.warn('[CallingService] deleteCallForUser error:', err);
+      return false;
+    }
+  }
   /**
    * Get WebRTC configuration with STUN and optional TURN servers
    */
@@ -97,13 +154,60 @@ export class CallingService {
 
       const nowIso = new Date().toISOString();
 
+      // Ensure a conversation row exists between the two users
+      let resolvedConversationId = params.conversationId || null;
+      if (!resolvedConversationId && params.callerId && params.receiverId) {
+        try {
+          const { data: existingConv } = await supabase
+            .from('conversations')
+            .select('id')
+            .or(
+              `and(user_1_id.eq.${params.callerId},user_2_id.eq.${params.receiverId}),and(user_1_id.eq.${params.receiverId},user_2_id.eq.${params.callerId})`
+            )
+            .maybeSingle();
+
+          if (existingConv?.id) {
+            resolvedConversationId = existingConv.id;
+          } else {
+            const { data: newConv } = await supabase
+              .from('conversations')
+              .insert({
+                user_1_id: params.callerId,
+                user_2_id: params.receiverId,
+                last_message_at: nowIso,
+              })
+              .select('id')
+              .maybeSingle();
+            if (newConv?.id) {
+              resolvedConversationId = newConv.id;
+            }
+          }
+        } catch (convErr) {
+          console.warn('[CallingService] Conversation resolve notice:', convErr);
+        }
+      }
+
+      // Update conversation last_message_at so the conversation surfaces immediately
+      if (resolvedConversationId) {
+        try {
+          await supabase
+            .from('conversations')
+            .update({ last_message_at: nowIso, updated_at: nowIso })
+            .eq('id', resolvedConversationId);
+        } catch {}
+      }
+
+      // Invalidate chat caches for both participants so the conversation entry is immediately discovered
+      invalidateChatCaches(params.callerId);
+      invalidateChatCaches(params.receiverId);
+
       // Insert into calls table
       const { data, error } = await supabase
         .from('calls')
         .insert({
           caller_id: params.callerId,
           receiver_id: params.receiverId,
-          conversation_id: params.conversationId || null,
+          conversation_id: resolvedConversationId,
           status: 'calling',
           started_at: nowIso,
           duration_seconds: 0,
@@ -179,9 +283,8 @@ export class CallingService {
         Boolean(params.receiverConsentAdminRecording);
 
       const updatePayload: Record<string, any> = {
-        status: 'connected',
+        status: 'connecting',
         answered_at: nowIso,
-        connected_at: nowIso,
         recipient_consent_admin_recording: params.receiverConsentAdminRecording,
         admin_recording_active: adminRecordingActive,
         updated_at: nowIso,
@@ -195,7 +298,7 @@ export class CallingService {
       if (error) {
         // Fallback without duplicate alias columns if schema is strict
         const fallbackPayload = {
-          status: 'connected',
+          status: 'connecting',
           answered_at: nowIso,
           recipient_consent_admin_recording: params.receiverConsentAdminRecording,
           admin_recording_active: adminRecordingActive,
@@ -215,6 +318,28 @@ export class CallingService {
       return { success: true, adminRecordingActive };
     } catch (err: any) {
       return { success: false, error: err?.message || 'कॉल स्वीकार करने में विफल' };
+    }
+  }
+
+  /**
+   * Transition call to connected once WebRTC media peer connection is actually established
+   */
+  public static async markCallConnected(callId: string): Promise<boolean> {
+    try {
+      const nowIso = new Date().toISOString();
+      const { error } = await supabase
+        .from('calls')
+        .update({
+          status: 'connected',
+          connected_at: nowIso,
+          updated_at: nowIso,
+        })
+        .eq('id', callId)
+        .neq('status', 'ended');
+
+      return !error;
+    } catch {
+      return false;
     }
   }
 
@@ -247,6 +372,26 @@ export class CallingService {
             updated_at: nowIso,
           })
           .eq('id', callId);
+      }
+
+      // Update linked conversation timestamp and invalidate caches
+      if (callId) {
+        try {
+          const { data: callRow } = await supabase
+            .from('calls')
+            .select('conversation_id, caller_id, receiver_id')
+            .eq('id', callId)
+            .maybeSingle();
+
+          if (callRow?.conversation_id) {
+            await supabase
+              .from('conversations')
+              .update({ last_message_at: nowIso, updated_at: nowIso })
+              .eq('id', callRow.conversation_id);
+          }
+          if (callRow?.caller_id) invalidateChatCaches(callRow.caller_id);
+          if (callRow?.receiver_id) invalidateChatCaches(callRow.receiver_id);
+        } catch {}
       }
 
       return true;
@@ -295,6 +440,26 @@ export class CallingService {
           .eq('id', params.callId);
       }
 
+      // Update linked conversation timestamp and invalidate caches
+      if (params.callId) {
+        try {
+          const { data: callRow } = await supabase
+            .from('calls')
+            .select('conversation_id, caller_id, receiver_id')
+            .eq('id', params.callId)
+            .maybeSingle();
+
+          if (callRow?.conversation_id) {
+            await supabase
+              .from('conversations')
+              .update({ last_message_at: nowIso, updated_at: nowIso })
+              .eq('id', callRow.conversation_id);
+          }
+          if (callRow?.caller_id) invalidateChatCaches(callRow.caller_id);
+          if (callRow?.receiver_id) invalidateChatCaches(callRow.receiver_id);
+        } catch {}
+      }
+
       return true;
     } catch {
       return false;
@@ -332,15 +497,16 @@ export class CallingService {
         });
       }
 
-      // 2. Persist offer, answer, ice_candidate, end in call_signals table for reliability
-      const persistableTypes = ['offer', 'answer', 'ice_candidate', 'end'];
+      // 2. Persist offer, answer, ice_candidate, end / ended in call_signals table for reliability
+      const persistableTypes = ['offer', 'answer', 'ice_candidate', 'end', 'ended'];
       if (persistableTypes.includes(signal.type)) {
         try {
+          const dbType = signal.type === 'ended' ? 'end' : signal.type;
           await supabase.from('call_signals').insert({
             call_id: signal.call_id,
             sender_id: signal.sender_id,
             recipient_id: signal.recipient_id,
-            type: signal.type,
+            type: dbType,
             payload: signal.payload,
           });
         } catch {
@@ -829,14 +995,14 @@ export class CallingService {
         .from('calls')
         .select('*')
         .order('created_at', { ascending: false })
-        .limit(50);
+        .limit(100);
 
-      if (params.conversationId) {
-        query = query.eq('conversation_id', params.conversationId);
-      } else if (params.userId1 && params.userId2) {
+      if (params.userId1 && params.userId2) {
         query = query.or(
           `and(caller_id.eq.${params.userId1},receiver_id.eq.${params.userId2}),and(caller_id.eq.${params.userId2},receiver_id.eq.${params.userId1})`
         );
+      } else if (params.conversationId) {
+        query = query.eq('conversation_id', params.conversationId);
       }
 
       const { data, error } = await query;
@@ -844,7 +1010,14 @@ export class CallingService {
         console.warn('getCallHistory error:', error);
         return [];
       }
-      return (data || []) as CallRecord[];
+      let calls = (data || []) as CallRecord[];
+      if (params.userId1) {
+        const deletedSet = this.getDeletedCallIds(params.userId1);
+        if (deletedSet.size > 0) {
+          calls = calls.filter((c) => !deletedSet.has(c.id));
+        }
+      }
+      return calls;
     } catch {
       return [];
     }

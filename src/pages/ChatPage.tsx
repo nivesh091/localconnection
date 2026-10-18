@@ -24,6 +24,7 @@ import {
   PhoneIncoming,
   PhoneOutgoing,
   PhoneMissed,
+  PhoneOff,
   Play,
   Pause,
   Disc,
@@ -370,6 +371,26 @@ export const ChatPage: React.FC<ChatPageProps> = ({
       }
     };
     fetchCalls();
+
+    const channelName = `chat_calls_${user.id}_${otherUserId}_${Date.now()}`;
+    const callSub = supabase
+      .channel(channelName)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'calls',
+        },
+        () => {
+          fetchCalls();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(callSub);
+    };
   }, [user?.id, otherUserId, conversationId]);
 
   const handleTogglePlayCallRec = async (rec: CallRecording) => {
@@ -430,6 +451,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
 
   // Selected message for press-and-hold (Section 39: 1 second hold)
   const [actionMessage, setActionMessage] = useState<Message | null>(null);
+  const [actionCall, setActionCall] = useState<CallRecord | null>(null);
+  const [showDeleteCallConfirm, setShowDeleteCallConfirm] = useState(false);
   const holdTimerRef = useRef<number | null>(null);
 
   // Profile detail modal for other user
@@ -468,6 +491,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({
   // Popups dismiss on outside click and mobile/browser Back button closes popup first
   usePopupBackDismiss(Boolean(fullscreenPhoto), () => setFullscreenPhoto(null));
   usePopupBackDismiss(Boolean(actionMessage), () => setActionMessage(null));
+  usePopupBackDismiss(Boolean(actionCall), () => {
+    setActionCall(null);
+    setShowDeleteCallConfirm(false);
+  });
   usePopupBackDismiss(Boolean(showLocationConfirm), () => setShowLocationConfirm(false));
   usePopupBackDismiss(Boolean(showVoiceRecorder), () => setShowVoiceRecorder(false));
   usePopupBackDismiss(isSearchOpen, handleCloseSearch);
@@ -1372,6 +1399,73 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     }
   };
 
+  // Call record press-and-hold timer
+  const startCallHoldTimer = (call: CallRecord, e?: React.MouseEvent | React.TouchEvent) => {
+    if (holdTimerRef.current) {
+      clearTimeout(holdTimerRef.current);
+      holdTimerRef.current = null;
+    }
+    isLongPressActiveRef.current = false;
+
+    if (e && 'touches' in e && e.touches.length > 0) {
+      touchStartPosRef.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    } else {
+      touchStartPosRef.current = null;
+    }
+
+    holdTimerRef.current = window.setTimeout(() => {
+      isLongPressActiveRef.current = true;
+      if (typeof window !== 'undefined') {
+        try {
+          const sel = window.getSelection();
+          sel?.removeAllRanges();
+          sel?.empty?.();
+        } catch {}
+      }
+      try {
+        if (typeof navigator !== 'undefined' && navigator.vibrate) {
+          navigator.vibrate(35);
+        }
+      } catch {}
+      setActionCall(call);
+    }, 380);
+  };
+
+  const handleCallContextMenu = (e: React.MouseEvent, call: CallRecord) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (typeof window !== 'undefined') {
+      window.getSelection()?.removeAllRanges();
+    }
+    cancelHoldTimer();
+    setActionCall(call);
+  };
+
+  const handleConfirmDeleteCall = async () => {
+    if (!actionCall || !user) return;
+    const callId = actionCall.id;
+    setActionCall(null);
+    setShowDeleteCallConfirm(false);
+
+    // Stop playback if playing recording from this call
+    const personalRec = personalRecordingsMap[callId];
+    if (personalRec && playingCallRecId === personalRec.id) {
+      if (callRecAudioRefs.current[personalRec.id]) {
+        callRecAudioRefs.current[personalRec.id].pause();
+      }
+      setPlayingCallRecId(null);
+    }
+
+    const ok = await CallingService.deleteCallForUser(callId, user.id);
+    if (ok) {
+      setCallHistory((prev) => prev.filter((c) => c.id !== callId));
+      ChatService.invalidateConversationsCache(user.id);
+      showToast('कॉल रिकॉर्ड सफलतापूर्वक हटा दिया गया।');
+    } else {
+      showToast('कॉल रिकॉर्ड हटाने में विफल। कृपया पुनः प्रयास करें।');
+    }
+  };
+
   const isOtherAdmin = otherUserId === ADMIN_USER_ID || otherUser?.mobile === '9149275779';
   const name = isOtherAdmin
     ? adminName
@@ -1424,6 +1518,32 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     (Boolean(otherUser?.mobile) && (isOtherMobilePublic || isAdmin)) ||
     isOtherInternetCallEnabled;
   const isInternetCallAction = isOtherInternetCallEnabled;
+
+  type TimelineItem =
+    | { type: 'message'; data: Message; timestamp: number }
+    | { type: 'call'; data: CallRecord; timestamp: number };
+
+  const timelineItems: TimelineItem[] = useMemo(() => {
+    const items: TimelineItem[] = [];
+
+    const deletedCalls = user?.id ? CallingService.getDeletedCallIds(user.id) : new Set<string>();
+
+    for (const msg of messages) {
+      const ts = new Date(msg.created_at).getTime() || 0;
+      items.push({ type: 'message', data: msg, timestamp: ts });
+    }
+
+    for (const call of callHistory) {
+      if (deletedCalls.has(call.id)) continue;
+      const ts = new Date(call.started_at || call.created_at).getTime() || 0;
+      items.push({ type: 'call', data: call, timestamp: ts });
+    }
+
+    // Single chronological timeline: oldest first, newest last
+    items.sort((a, b) => a.timestamp - b.timestamp);
+
+    return items;
+  }, [messages, callHistory, user?.id]);
 
   return (
     <div
@@ -1686,60 +1806,126 @@ export const ChatPage: React.FC<ChatPageProps> = ({
           <div className="py-12 text-center text-xs text-slate-400">{t.loading}</div>
         ) : (
           <>
-            {/* Call History Events in Chat (Requirement 12) */}
-            {callHistory.length > 0 && (
-              <div className="space-y-2 py-1">
-                {callHistory.map((call) => {
+            {timelineItems.length === 0 ? (
+              <div className="py-12 text-center text-xs text-slate-400 space-y-1">
+                <p>बातचीत की शुरुआत करें।</p>
+                <p className="text-[10px] text-slate-400">
+                  मैसेज, फ़ोटो या अपनी आवाज में संदेश भेजें।
+                </p>
+              </div>
+            ) : (
+              timelineItems.map((item) => {
+                if (item.type === 'call') {
+                  const call = item.data;
                   const isOutgoing = call.caller_id === user?.id;
                   const isMissed = call.status === 'missed';
+                  const isRejected = call.status === 'rejected';
+                  const isFailed = call.status === 'failed';
                   const personalRec = personalRecordingsMap[call.id];
                   const isPlayingRec = personalRec && playingCallRecId === personalRec.id;
+                  const isSelectedForAction = actionCall?.id === call.id;
 
                   return (
-                    <div key={call.id} className="flex justify-center my-1.5">
-                      <div className="bg-white/95 border border-slate-200/90 rounded-2xl px-3.5 py-2 max-w-xs w-full shadow-2xs space-y-1.5 text-center">
-                        <div className="flex items-center justify-center gap-1.5 text-xs font-bold text-slate-800">
-                          {isMissed ? (
-                            <>
-                              <PhoneMissed className="w-3.5 h-3.5 text-rose-600" />
-                              <span className="text-rose-700">मिस्ड इंटरनेट कॉल</span>
-                            </>
-                          ) : isOutgoing ? (
-                            <>
-                              <PhoneOutgoing className="w-3.5 h-3.5 text-teal-700" />
-                              <span>आउटगोइंग इंटरनेट कॉल</span>
-                            </>
-                          ) : (
-                            <>
-                              <PhoneIncoming className="w-3.5 h-3.5 text-emerald-600" />
-                              <span>इनकमिंग इंटरनेट कॉल</span>
-                            </>
-                          )}
-                        </div>
+                    <div
+                      key={`call-${call.id}`}
+                      id={`call-${call.id}`}
+                      onMouseDown={(e) => {
+                        if (e.button === 0) startCallHoldTimer(call, e);
+                      }}
+                      onMouseUp={cancelHoldTimer}
+                      onMouseLeave={cancelHoldTimer}
+                      onTouchStart={(e) => startCallHoldTimer(call, e)}
+                      onTouchEnd={cancelHoldTimer}
+                      onTouchMove={handleTouchMove}
+                      onTouchCancel={cancelHoldTimer}
+                      onContextMenu={(e) => handleCallContextMenu(e, call)}
+                      onDragStart={(e) => e.preventDefault()}
+                      style={{
+                        WebkitTouchCallout: 'none',
+                        WebkitUserSelect: 'none',
+                        MozUserSelect: 'none',
+                        msUserSelect: 'none',
+                        userSelect: 'none',
+                        touchAction: 'pan-y',
+                      }}
+                      className={`flex flex-col select-none my-1.5 ${isOutgoing ? 'items-end' : 'items-start'}`}
+                    >
+                      <div
+                        onContextMenu={(e) => handleCallContextMenu(e, call)}
+                        style={{
+                          backgroundColor: isOutgoing ? '#d1f2cd' : '#ffffff',
+                          borderColor: isOutgoing ? '#9de3b6' : '#e2e8f0',
+                        }}
+                        className={`max-w-[85%] sm:max-w-xs rounded-2xl p-3 shadow-xs border transition-all cursor-pointer ${
+                          isSelectedForAction
+                            ? 'ring-3 ring-teal-500 ring-offset-2 ring-offset-slate-100 shadow-md scale-[1.01]'
+                            : ''
+                        }`}
+                      >
+                        {/* Header with Icon, Direction and Status */}
+                        <div className="flex items-center gap-2.5">
+                          <div
+                            className={`w-9 h-9 rounded-full flex items-center justify-center shrink-0 shadow-2xs ${
+                              isMissed
+                                ? 'bg-rose-100 text-rose-600 border border-rose-200'
+                                : isRejected
+                                ? 'bg-amber-100 text-amber-700 border border-amber-200'
+                                : isOutgoing
+                                ? 'bg-teal-100 text-teal-700 border border-teal-200'
+                                : 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                            }`}
+                          >
+                            {isMissed ? (
+                              <PhoneMissed className="w-4 h-4 text-rose-600" />
+                            ) : isRejected ? (
+                              <PhoneOff className="w-4 h-4 text-amber-700" />
+                            ) : isOutgoing ? (
+                              <PhoneOutgoing className="w-4 h-4 text-teal-700" />
+                            ) : (
+                              <PhoneIncoming className="w-4 h-4 text-emerald-700" />
+                            )}
+                          </div>
 
-                        <div className="flex items-center justify-center gap-2 text-[10px] text-slate-500">
-                          <span>
-                            {new Date(call.started_at).toLocaleTimeString('hi-IN', {
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </span>
-                          {call.duration_seconds > 0 && (
-                            <>
-                              <span>•</span>
+                          <div className="min-w-0 flex-1">
+                            <p className={`text-xs font-bold leading-tight ${isMissed ? 'text-rose-700' : 'text-slate-900'}`}>
+                              {isMissed
+                                ? (isOutgoing ? 'अनुत्तरित आउटगोइंग कॉल' : 'मिस्ड इंटरनेट कॉल')
+                                : isRejected
+                                ? 'कॉल अस्वीकार की गई'
+                                : isFailed
+                                ? 'कॉल विफल'
+                                : isOutgoing
+                                ? 'आउटगोइंग इंटरनेट कॉल'
+                                : 'इनकमिंग इंटरनेट कॉल'}
+                            </p>
+                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5">
                               <span>
-                                {Math.floor(call.duration_seconds / 60)}m {call.duration_seconds % 60}s
+                                {new Date(call.started_at || call.created_at).toLocaleTimeString('hi-IN', {
+                                  hour: '2-digit',
+                                  minute: '2-digit',
+                                })}
                               </span>
-                            </>
-                          )}
+                              {call.duration_seconds > 0 && (
+                                <>
+                                  <span>•</span>
+                                  <span className="font-medium text-slate-600">
+                                    {Math.floor(call.duration_seconds / 60)}m {call.duration_seconds % 60}s
+                                  </span>
+                                </>
+                              )}
+                            </div>
+                          </div>
                         </div>
 
                         {/* Private personal call recording playback (Only visible to owner) */}
                         {personalRec && !personalRec.is_deleted_by_user && (
-                          <div className="pt-1 border-t border-slate-100 flex items-center justify-between gap-2">
+                          <div className="mt-2 pt-2 border-t border-slate-200/70 flex items-center justify-between gap-2">
                             <button
                               type="button"
-                              onClick={() => handleTogglePlayCallRec(personalRec)}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleTogglePlayCallRec(personalRec);
+                              }}
                               className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-teal-50 hover:bg-teal-100 text-teal-800 text-[11px] font-bold transition cursor-pointer"
                             >
                               {isPlayingRec ? (
@@ -1758,19 +1944,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                       </div>
                     </div>
                   );
-                })}
-              </div>
-            )}
+                }
 
-            {messages.length === 0 && callHistory.length === 0 ? (
-              <div className="py-12 text-center text-xs text-slate-400 space-y-1">
-                <p>बातचीत की शुरुआत करें।</p>
-                <p className="text-[10px] text-slate-400">
-                  मैसेज, फ़ोटो या अपनी आवाज में संदेश भेजें।
-                </p>
-              </div>
-            ) : (
-              messages.map((msg) => {
+                const msg = item.data;
             const isMine = msg.is_mine;
             const isDeleted = msg.deleted_for_everyone;
             const isSelectedForAction = actionMessage?.id === msg.id;
@@ -2071,6 +2247,113 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                 {t.cancel}
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Call Record Action Modal: Long-Press Delete with Confirmation */}
+      {actionCall && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-150"
+          onClick={() => {
+            setActionCall(null);
+            setShowDeleteCallConfirm(false);
+          }}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-sm p-4 sm:p-5 shadow-2xl space-y-3.5 border border-slate-200 animate-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-slate-100 pb-2.5">
+              <div className="flex items-center gap-2">
+                <Trash2 className="w-4 h-4 text-rose-600" />
+                <h4 className="text-sm font-bold text-slate-900">कॉल रिकॉर्ड हटाएं (Delete Call Record)</h4>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActionCall(null);
+                  setShowDeleteCallConfirm(false);
+                }}
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-full hover:bg-slate-100 transition cursor-pointer"
+                title="बंद करें"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Selected call preview */}
+            <div className="bg-slate-50 border border-slate-200/90 rounded-xl p-3 text-xs">
+              <span className="block text-[10px] font-bold text-teal-800 uppercase tracking-wider mb-1">
+                चयनित कॉल (Selected Call):
+              </span>
+              <div className="flex items-center gap-2 text-slate-800 font-medium">
+                {actionCall.status === 'missed' ? (
+                  <PhoneMissed className="w-4 h-4 text-rose-600 shrink-0" />
+                ) : actionCall.caller_id === user?.id ? (
+                  <PhoneOutgoing className="w-4 h-4 text-teal-600 shrink-0" />
+                ) : (
+                  <PhoneIncoming className="w-4 h-4 text-emerald-600 shrink-0" />
+                )}
+                <span>
+                  {actionCall.status === 'missed'
+                    ? (actionCall.caller_id === user?.id ? 'अनुत्तरित आउटगोइंग कॉल' : 'मिस्ड इंटरनेट कॉल')
+                    : actionCall.status === 'rejected'
+                    ? 'कॉल अस्वीकार की गई'
+                    : actionCall.caller_id === user?.id
+                    ? 'आउटगोइंग कॉल'
+                    : 'इनकमिंग कॉल'}
+                  {' • '}
+                  {new Date(actionCall.started_at || actionCall.created_at).toLocaleTimeString('hi-IN', {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                  })}
+                  {actionCall.duration_seconds > 0 && ` (${Math.floor(actionCall.duration_seconds / 60)}m ${actionCall.duration_seconds % 60}s)`}
+                </span>
+              </div>
+            </div>
+
+            {showDeleteCallConfirm ? (
+              <div className="space-y-3 pt-1">
+                <p className="text-xs text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3 leading-relaxed">
+                  क्या आप वाकई इस कॉल रिकॉर्ड को अपने चैट इतिहास से हटाना चाहते हैं? यह रिकॉर्ड केवल आपके चैट व्यू से हटेगा।
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={handleConfirmDeleteCall}
+                    className="flex-1 py-2.5 px-3 rounded-xl font-bold text-xs bg-rose-600 hover:bg-rose-700 text-white shadow-sm transition cursor-pointer"
+                  >
+                    हाँ, हटाएं (Confirm Delete)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowDeleteCallConfirm(false)}
+                    className="flex-1 py-2.5 px-3 rounded-xl font-semibold text-xs bg-slate-100 hover:bg-slate-200 text-slate-700 transition cursor-pointer"
+                  >
+                    रद्द करें (Cancel)
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setShowDeleteCallConfirm(true)}
+                  className="w-full flex items-center justify-center gap-2 py-3 px-4 rounded-xl font-bold text-xs sm:text-sm bg-rose-600 hover:bg-rose-700 active:scale-98 text-white shadow-md transition cursor-pointer"
+                >
+                  <Trash2 className="w-4 h-4 text-white" />
+                  <span>कॉल रिकॉर्ड हटाएं (Delete call record)</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActionCall(null)}
+                  className="w-full py-2.5 px-4 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition cursor-pointer text-center"
+                >
+                  रद्द करें (Cancel)
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
