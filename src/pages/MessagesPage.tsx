@@ -82,8 +82,18 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
   usePopupBackDismiss(Boolean(activeMenuId), () => setActiveMenuId(null), menuContainerRef);
 
   const isAdminConversation = (c: Conversation) => {
+    const other = c.other_user;
+    const isNiveshUser =
+      other?.id === 'a1a801bb-b759-4a9b-8aa1-f7f0ca5b08cc' ||
+      (other as any)?.username === '0000000009' ||
+      other?.name === 'Nivesh Kumar' ||
+      (c.user_1_id === 'a1a801bb-b759-4a9b-8aa1-f7f0ca5b08cc' && c.user_2_id === user?.id) ||
+      (c.user_2_id === 'a1a801bb-b759-4a9b-8aa1-f7f0ca5b08cc' && c.user_1_id === user?.id);
+
+    if (isNiveshUser) return false;
+
     return (
-      c.other_user?.id === ADMIN_USER_ID ||
+      (other?.id === ADMIN_USER_ID && other?.name !== 'Nivesh Kumar') ||
       c.user_1_id === ADMIN_USER_ID ||
       c.user_2_id === ADMIN_USER_ID
     );

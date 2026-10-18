@@ -219,8 +219,8 @@ export class AdminService {
           home_welcome_en: `Welcome to ${currentNameEn}`,
           chat_retention_days: 30,
           show_requirements_on_map: localReqMapOverride,
-          mobile_calling_enabled: cachedCallingSettings ? cachedCallingSettings.mobile_calling_enabled : false,
-          internet_calling_enabled: cachedCallingSettings ? cachedCallingSettings.internet_calling_enabled : false,
+          mobile_calling_enabled: cachedCallingSettings ? cachedCallingSettings.mobile_calling_enabled : true,
+          internet_calling_enabled: cachedCallingSettings ? cachedCallingSettings.internet_calling_enabled : true,
           updated_at: new Date().toISOString(),
         };
         return fallback;

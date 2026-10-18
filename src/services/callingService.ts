@@ -785,101 +785,176 @@ export class CallingService {
     onIncoming: (call: CallRecord) => void,
     onCallTerminated?: (callId: string, status?: string, reason?: string) => void
   ): () => void {
+    let isDisposed = false;
+    let channel: ReturnType<typeof supabase.channel> | null = null;
+    const dispatchedIncomingCallIds = new Set<string>();
+
+    const handleIncomingDispatch = async (incomingCall: CallRecord, callerProfile?: any) => {
+      if (isDisposed || !incomingCall?.id) return;
+      if (dispatchedIncomingCallIds.has(incomingCall.id)) return;
+      dispatchedIncomingCallIds.add(incomingCall.id);
+
+      let resolvedCaller = callerProfile;
+      if (!resolvedCaller) {
+        try {
+          const { data } = await supabase
+            .from('profiles')
+            .select('id, name, profile_photo, mobile')
+            .eq('id', incomingCall.caller_id)
+            .maybeSingle();
+          resolvedCaller = data;
+        } catch {}
+      }
+
+      onIncoming({
+        ...incomingCall,
+        caller: resolvedCaller || null,
+      });
+    };
+
+    // Fast active check for incoming calls (catches calls immediately even if WS event was delayed during navigation/DOM click)
+    const checkForPendingIncomingCalls = async () => {
+      if (isDisposed) return;
+      try {
+        const { data: pendingCalls } = await supabase
+          .from('calls')
+          .select('*')
+          .eq('receiver_id', userId)
+          .eq('status', 'calling')
+          .order('created_at', { ascending: false })
+          .limit(1);
+
+        if (pendingCalls && pendingCalls.length > 0 && !isDisposed) {
+          const topCall = pendingCalls[0] as CallRecord;
+          const callAgeMs = Date.now() - new Date(topCall.created_at).getTime();
+          // Only process calls less than 45 seconds old that haven't been dispatched
+          if (callAgeMs < 45000 && !dispatchedIncomingCallIds.has(topCall.id)) {
+            await handleIncomingDispatch(topCall);
+          }
+        }
+      } catch {}
+    };
+
     const channelName = `user_calls_${userId}`;
 
-    const channel = supabase
-      .channel(channelName, {
-        config: { broadcast: { self: false } },
-      })
-      // 1. Direct WebSocket broadcast listener for incoming calls
-      .on('broadcast', { event: 'incoming_call' }, async ({ payload }) => {
-        if (!payload?.call) return;
-        const incomingCall = payload.call as CallRecord;
+    const setupChannel = () => {
+      if (isDisposed) return;
+      if (channel) {
+        try { supabase.removeChannel(channel); } catch {}
+      }
 
-        if (incomingCall.status === 'calling' && incomingCall.receiver_id === userId) {
-          let callerProfile = payload.caller;
-          if (!callerProfile) {
-            const { data } = await supabase
-              .from('profiles')
-              .select('id, name, profile_photo, mobile')
-              .eq('id', incomingCall.caller_id)
-              .maybeSingle();
-            callerProfile = data;
-          }
+      channel = supabase
+        .channel(channelName, {
+          config: { broadcast: { self: false } },
+        })
+        // 1. Direct WebSocket broadcast listener for incoming calls
+        .on('broadcast', { event: 'incoming_call' }, async ({ payload }) => {
+          if (!payload?.call) return;
+          const incomingCall = payload.call as CallRecord;
 
-          onIncoming({
-            ...incomingCall,
-            caller: callerProfile,
-          });
-        }
-      })
-      // 2. Direct WebSocket broadcast listener for cancelled / ended calls
-      .on('broadcast', { event: 'call_ended' }, ({ payload }) => {
-        if (payload?.callId) {
-          onCallTerminated?.(payload.callId, payload.status || 'ended', payload.reason || 'caller_ended');
-        }
-      })
-      .on('broadcast', { event: 'call_cancelled' }, ({ payload }) => {
-        if (payload?.callId) {
-          onCallTerminated?.(payload.callId, payload.status || 'ended', payload.reason || 'caller_ended');
-        }
-      })
-      // 3. Database postgres_changes listener for new incoming calls
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'calls',
-          filter: `receiver_id=eq.${userId}`,
-        },
-        async (payload) => {
-          const callData = payload.new as CallRecord;
-          if (callData && callData.status === 'calling') {
-            const { data: callerProfile } = await supabase
-              .from('profiles')
-              .select('id, name, profile_photo, mobile')
-              .eq('id', callData.caller_id)
-              .maybeSingle();
+          if (incomingCall.status === 'calling' && incomingCall.receiver_id === userId) {
+            await handleIncomingDispatch(incomingCall, payload.caller);
+          }
+        })
+        // 2. Direct WebSocket broadcast listener for cancelled / ended calls
+        .on('broadcast', { event: 'call_ended' }, ({ payload }) => {
+          if (payload?.callId) {
+            onCallTerminated?.(payload.callId, payload.status || 'ended', payload.reason || 'caller_ended');
+          }
+        })
+        .on('broadcast', { event: 'call_cancelled' }, ({ payload }) => {
+          if (payload?.callId) {
+            onCallTerminated?.(payload.callId, payload.status || 'ended', payload.reason || 'caller_ended');
+          }
+        })
+        // 3. Database postgres_changes listener for new incoming calls
+        .on(
+          'postgres_changes',
+          {
+            event: 'INSERT',
+            schema: 'public',
+            table: 'calls',
+            filter: `receiver_id=eq.${userId}`,
+          },
+          async (payload) => {
+            const callData = payload.new as CallRecord;
+            if (callData && callData.status === 'calling') {
+              await handleIncomingDispatch(callData);
+            }
+          }
+        )
+        // 4. Database postgres_changes listener for call status updates (ended, rejected, missed)
+        .on(
+          'postgres_changes',
+          {
+            event: 'UPDATE',
+            schema: 'public',
+            table: 'calls',
+            filter: `receiver_id=eq.${userId}`,
+          },
+          (payload) => {
+            const updated = payload.new as CallRecord;
+            if (
+              updated &&
+              (updated.status === 'ended' || updated.status === 'rejected' || updated.status === 'missed')
+            ) {
+              onCallTerminated?.(
+                updated.id,
+                updated.status,
+                updated.ended_reason || (updated as any).end_reason || 'caller_ended'
+              );
+            }
+          }
+        )
+        .subscribe((status, err) => {
+          if (err || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn(`Incoming call subscription notice (${channelName}):`, status, err);
+            // Re-check pending calls on channel issues
+            checkForPendingIncomingCalls();
+          }
+        });
+    };
 
-            onIncoming({
-              ...callData,
-              caller: callerProfile as any,
-            });
-          }
-        }
-      )
-      // 4. Database postgres_changes listener for call status updates (ended, rejected, missed)
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'calls',
-          filter: `receiver_id=eq.${userId}`,
-        },
-        (payload) => {
-          const updated = payload.new as CallRecord;
-          if (
-            updated &&
-            (updated.status === 'ended' || updated.status === 'rejected' || updated.status === 'missed')
-          ) {
-            onCallTerminated?.(
-              updated.id,
-              updated.status,
-              updated.ended_reason || (updated as any).end_reason || 'caller_ended'
-            );
-          }
-        }
-      )
-      .subscribe((status, err) => {
-        if (err) {
-          console.warn(`Incoming call subscription notice (${channelName}):`, status, err);
-        }
-      });
+    setupChannel();
+
+    // Trigger immediate check on mount
+    checkForPendingIncomingCalls();
+
+    // Regular fallback poll every 2.5s to ensure incoming calls are never lost while user interacts with app
+    const pollInterval = setInterval(() => {
+      if (!isDisposed) {
+        checkForPendingIncomingCalls();
+      }
+    }, 2500);
+
+    // Immediate check on interaction, navigation, focus, or tab visibility change
+    const onUserInteraction = () => {
+      if (!isDisposed) {
+        checkForPendingIncomingCalls();
+      }
+    };
+
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onUserInteraction);
+      window.addEventListener('popstate', onUserInteraction);
+      window.addEventListener('hashchange', onUserInteraction);
+      window.addEventListener('click', onUserInteraction, { capture: true, passive: true });
+      document.addEventListener('visibilitychange', onUserInteraction);
+    }
 
     return () => {
-      supabase.removeChannel(channel);
+      isDisposed = true;
+      clearInterval(pollInterval);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onUserInteraction);
+        window.removeEventListener('popstate', onUserInteraction);
+        window.removeEventListener('hashchange', onUserInteraction);
+        window.removeEventListener('click', onUserInteraction, { capture: true } as any);
+        document.removeEventListener('visibilitychange', onUserInteraction);
+      }
+      if (channel) {
+        try { supabase.removeChannel(channel); } catch {}
+      }
     };
   }
 

@@ -31,6 +31,7 @@ import { supabase } from '../lib/supabase';
 import { CallingService } from '../services/callingService';
 import { AdminService } from '../services/adminService';
 import { ChatService } from '../services/chatService';
+import { ProfileService } from '../services/profileService';
 import { ringtoneService } from '../services/ringtoneService';
 import { CallAudioRecorder } from '../services/callAudioRecorder';
 import {
@@ -252,15 +253,14 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         } catch {}
 
         // Check if Admin has disabled Internet Calling globally (fail-safe)
-        const callingSettings = await AdminService.getCallingSettings().catch(() => ({
-          mobile_calling_enabled: false,
-          internet_calling_enabled: false,
-        }));
-        if (!callingSettings.internet_calling_enabled) {
-          console.warn('[WebRTC-Call] Rejecting incoming call because internet calling is disabled by admin:', incomingCall.id);
-          CallingService.rejectCall(incomingCall.id);
-          return;
-        }
+        try {
+          const callingSettings = await AdminService.getCallingSettings();
+          if (callingSettings.internet_calling_enabled === false) {
+            console.warn('[WebRTC-Call] Rejecting incoming call because internet calling is explicitly disabled by admin:', incomingCall.id);
+            CallingService.rejectCall(incomingCall.id);
+            return;
+          }
+        } catch {}
 
         // If already in an active call, ignore or decline duplicate
         if (
@@ -275,14 +275,32 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           return;
         }
 
+        const resolvedCaller: UserProfile = incomingCall.caller || {
+          id: incomingCall.caller_id,
+          name: 'उपयोगकर्ता',
+          profile_photo: null,
+          mobile: '',
+          created_at: incomingCall.created_at || new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        };
+
         handledCallIdsRef.current.add(incomingCall.id);
         setActiveCall(incomingCall);
-        setOtherParticipant(incomingCall.caller || null);
+        setOtherParticipant(resolvedCaller);
         setCallState('ringing');
         setIsCallMinimized(false);
         isInitiatorRef.current = false;
         isConnectedRef.current = false;
         ringtoneService.startIncomingRingtone();
+
+        // Fetch full caller profile asynchronously if missing
+        if (!incomingCall.caller) {
+          ProfileService.getProfile(incomingCall.caller_id)
+            .then((prof: UserProfile | null) => {
+              if (prof) setOtherParticipant(prof);
+            })
+            .catch(() => {});
+        }
 
         // Dedicated realtime watch on this incoming call for immediate caller-cancellation detection
         if (incomingCallWatchChannelRef.current) {
@@ -1107,23 +1125,13 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       // 5. Play short ended status beep
       ringtoneService.playStatusBeep('ended');
 
-      // 6. Set UI to ended
-      setCallState('ended');
-      setErrorMessage(
-        reason === 'caller_ended'
-          ? 'कॉलर ने कॉल रद्द कर दी (Caller Cancelled)'
-          : 'कॉल समाप्त हो गई (Call Ended)'
-      );
-
-      // 7. Cleanup and return to idle
-      setTimeout(() => {
-        cleanupCall();
-        setCallState('idle');
-        setActiveCall(null);
-        setOtherParticipant(null);
-        setErrorMessage(null);
-        terminatingCallIdRef.current = null;
-      }, 1200);
+      // 6. Dismiss local call interface immediately
+      cleanupCall();
+      setCallState('idle');
+      setActiveCall(null);
+      setOtherParticipant(null);
+      setErrorMessage(null);
+      terminatingCallIdRef.current = null;
     },
     [activeCall, cleanupCall, user?.id]
   );
@@ -1140,25 +1148,49 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         return;
       }
       terminatingCallIdRef.current = callId;
-      console.log('[WebRTC-Call] Processing peer hangup for call:', callId);
+      console.log('[WebRTC-Call] Processing peer hangup immediately for call:', callId);
 
       ringtoneService.stopAll();
       ringtoneService.playStatusBeep('ended');
-      setCallState('ended');
+
+      // Stop local microphone tracks immediately
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((track) => track.stop());
+        localStreamRef.current = null;
+      }
+
+      // Stop remote audio element immediately
+      if (audioElementRef.current) {
+        audioElementRef.current.srcObject = null;
+        try { audioElementRef.current.pause(); } catch {}
+      }
+
+      // Close WebRTC peer connection immediately
+      if (peerConnectionRef.current) {
+        try { peerConnectionRef.current.close(); } catch {}
+        peerConnectionRef.current = null;
+      }
 
       const duration = callDuration;
 
-      // Upload personal recording if active
-      await finishAndUploadRecording(callId, duration);
+      // IMMEDIATELY dismiss active call interface
+      cleanupCall();
+      setCallState('idle');
+      setActiveCall(null);
+      setOtherParticipant(null);
+      setCallDuration(0);
+      setIsCallMinimized(false);
+      setIsAdminRecordingActive(false);
+      setErrorMessage(null);
 
-      setTimeout(() => {
-        cleanupCall();
-        setCallState('idle');
-        setActiveCall(null);
-        setCallDuration(0);
-        setOtherParticipant(null);
-        setIsAdminRecordingActive(false);
-      }, 1200);
+      // Upload personal recording if active in background
+      Promise.resolve().then(async () => {
+        try {
+          await finishAndUploadRecording(callId, duration);
+        } catch (err) {
+          console.warn('[WebRTC-Call] Error uploading recording after peer hangup:', err);
+        }
+      });
     },
     [callDuration, finishAndUploadRecording, cleanupCall]
   );
@@ -1252,13 +1284,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
               console.log('[WebRTC-Call] Peer rejected call');
               ringtoneService.stopAll();
               ringtoneService.playStatusBeep('ended');
-              setCallState('ended');
+              cleanupCall();
+              setCallState('idle');
+              setActiveCall(null);
+              setOtherParticipant(null);
               setErrorMessage('कॉल अस्वीकार कर दी गई (Call Declined)');
-              setTimeout(() => {
-                cleanupCall();
-                setCallState('idle');
-                setActiveCall(null);
-              }, 2000);
             } else if (signal.type === 'ended' || signal.type === 'end') {
               console.log('[WebRTC-Call] Peer ended call');
               handlePeerHangup(callId);
@@ -1368,13 +1398,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
               } else if (updated.status === 'rejected') {
                 ringtoneService.stopAll();
                 ringtoneService.playStatusBeep('ended');
-                setCallState('ended');
+                cleanupCall();
+                setCallState('idle');
+                setActiveCall(null);
+                setOtherParticipant(null);
                 setErrorMessage('कॉल अस्वीकार कर दी गई (Call Declined)');
-                setTimeout(() => {
-                  cleanupCall();
-                  setCallState('idle');
-                  setActiveCall(null);
-                }, 2000);
               } else if (updated.status === 'ended') {
                 handlePeerHangup(callId);
               }
@@ -1629,13 +1657,11 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         ringtoneService.stopIncomingRingtone();
         ringtoneService.stopAll();
         ringtoneService.playStatusBeep('ended');
-        setCallState('ended');
+        cleanupCall();
+        setCallState('idle');
+        setActiveCall(null);
+        setOtherParticipant(null);
         setErrorMessage(answerRes.error || 'कॉल स्वीकार करने में विफल (Failed to answer call)');
-        setTimeout(() => {
-          cleanupCall();
-          setCallState('idle');
-          setActiveCall(null);
-        }, 2000);
         return;
       }
 
@@ -1655,17 +1681,15 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       ringtoneService.stopIncomingRingtone();
       ringtoneService.stopAll();
       ringtoneService.playStatusBeep('ended');
-      setCallState('ended');
+      cleanupCall();
+      setCallState('idle');
+      setActiveCall(null);
+      setOtherParticipant(null);
       setErrorMessage(
         err?.name === 'NotAllowedError'
           ? 'माइक्रोफ़ोन की अनुमति आवश्यक है।'
           : err?.message || 'कॉल कनेक्ट करने में त्रुटि'
       );
-      setTimeout(() => {
-        cleanupCall();
-        setCallState('idle');
-        setActiveCall(null);
-      }, 2000);
     }
   };
 
@@ -1731,13 +1755,31 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
     terminatingCallIdRef.current = callId;
 
-    console.log('[WebRTC-Call] Ending active call:', callId);
+    console.log('[WebRTC-Call] Ending active call immediately:', callId);
     ringtoneService.stopAll();
     ringtoneService.playStatusBeep('ended');
 
+    // 1. Immediately stop local microphone tracks
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((track) => track.stop());
+      localStreamRef.current = null;
+    }
+
+    // 2. Immediately stop remote audio playback
+    if (audioElementRef.current) {
+      audioElementRef.current.srcObject = null;
+      try { audioElementRef.current.pause(); } catch {}
+    }
+
+    // 3. Immediately close WebRTC peer connection
+    if (peerConnectionRef.current) {
+      try { peerConnectionRef.current.close(); } catch {}
+      peerConnectionRef.current = null;
+    }
+
     const duration = callDuration;
 
-    // Send end signal to peer
+    // 4. Send end signal to peer (non-blocking)
     if (user?.id) {
       const recipientId = isInitiatorRef.current
         ? activeCall.receiver_id
@@ -1755,27 +1797,35 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       );
     }
 
-    setCallState('ended');
+    // 5. IMMEDIATELY DISMISS CALL UI
+    cleanupCall();
+    setCallState('idle');
+    setActiveCall(null);
+    setOtherParticipant(null);
+    setCallDuration(0);
+    setIsCallMinimized(false);
+    setIsAdminRecordingActive(false);
+    setErrorMessage(null);
 
-    // Update status on DB
-    await CallingService.endCall({
-      callId,
-      reason: isInitiatorRef.current ? 'caller_ended' : 'receiver_ended',
-      durationSeconds: duration,
-      status: 'ended',
+    // 6. Asynchronously update status on DB and upload recording in background
+    Promise.resolve().then(async () => {
+      try {
+        await CallingService.endCall({
+          callId,
+          reason: isInitiatorRef.current ? 'caller_ended' : 'receiver_ended',
+          durationSeconds: duration,
+          status: 'ended',
+        });
+      } catch (err) {
+        console.warn('[WebRTC-Call] Error reporting call end to DB:', err);
+      }
+
+      try {
+        await finishAndUploadRecording(callId, duration);
+      } catch (err) {
+        console.warn('[WebRTC-Call] Error uploading call recording:', err);
+      }
     });
-
-    // Upload recorded audio if applicable
-    await finishAndUploadRecording(callId, duration);
-
-    setTimeout(() => {
-      cleanupCall();
-      setCallState('idle');
-      setActiveCall(null);
-      setCallDuration(0);
-      setOtherParticipant(null);
-      setIsAdminRecordingActive(false);
-    }, 1200);
   };
 
   // Mute / Unmute: Derived directly from current participant's own local microphone tracks
@@ -1884,7 +1934,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       {/* =====================================================================
           1. INCOMING CALL MODAL OVERLAY
       ====================================================================== */}
-      {callState === 'ringing' && otherParticipant && (
+      {callState === 'ringing' && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-in fade-in duration-200">
           <div className="relative w-full max-w-sm bg-gradient-to-b from-slate-900 to-slate-950 text-white rounded-3xl p-6 shadow-2xl border border-slate-800 text-center flex flex-col items-center animate-in zoom-in-95 duration-200">
             {/* Top Badge */}
@@ -1897,7 +1947,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
             <div className="relative mb-5">
               <div className="absolute inset-0 rounded-full bg-emerald-500/20 animate-ping" />
               <div className="relative w-24 h-24 rounded-full overflow-hidden border-3 border-emerald-400 bg-slate-800 flex items-center justify-center shadow-lg">
-                {otherParticipant.profile_photo ? (
+                {otherParticipant?.profile_photo ? (
                   <img
                     src={otherParticipant.profile_photo}
                     alt={otherParticipant.name}
@@ -1905,7 +1955,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                   />
                 ) : (
                   <span className="text-3xl font-bold text-white">
-                    {otherParticipant.name.charAt(0).toUpperCase()}
+                    {(otherParticipant?.name || 'U').trim().charAt(0).toUpperCase()}
                   </span>
                 )}
               </div>
@@ -1913,10 +1963,10 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
 
             {/* Name & Title */}
             <h3 className="text-xl font-bold text-white mb-1">
-              {otherParticipant.name}
+              {otherParticipant?.name || 'उपयोगकर्ता'}
             </h3>
             <p className="text-xs text-slate-400 mb-4">
-              {otherParticipant.location?.place || `${websiteName} इंटरनेट कॉल`}
+              {otherParticipant?.location?.place || `${websiteName} इंटरनेट कॉल`}
             </p>
 
             {/* Legal Recording Disclosure Card */}
@@ -1982,10 +2032,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       ====================================================================== */}
       {(callState === 'calling' ||
         callState === 'connecting' ||
-        callState === 'connected' ||
-        callState === 'ended') &&
-        !isCallMinimized &&
-        otherParticipant && (
+        callState === 'connected') &&
+        !isCallMinimized && (
           <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
             <div className="relative w-full max-w-sm bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 text-white rounded-3xl p-6 shadow-2xl border border-slate-800 text-center flex flex-col items-center animate-in zoom-in-95 duration-200">
               {/* Minimize Call Button (Issue 3) */}
@@ -2018,11 +2066,6 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                     सुरक्षित इंटरनेट कॉल • {formatDuration(callDuration)}
                   </span>
                 )}
-                {callState === 'ended' && (
-                  <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-slate-700 text-slate-300 rounded-full text-xs font-semibold">
-                    कॉल समाप्त
-                  </span>
-                )}
               </div>
 
               {/* Avatar with Sound Wave Ring */}
@@ -2031,7 +2074,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                   <div className="absolute -inset-2 rounded-full bg-emerald-500/20 blur-sm animate-pulse" />
                 )}
                 <div className="relative w-24 h-24 rounded-full overflow-hidden border-3 border-teal-500 bg-slate-800 flex items-center justify-center shadow-xl">
-                  {otherParticipant.profile_photo ? (
+                  {otherParticipant?.profile_photo ? (
                     <img
                       src={otherParticipant.profile_photo}
                       alt={otherParticipant.name}
@@ -2039,7 +2082,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                     />
                   ) : (
                     <span className="text-3xl font-bold text-white">
-                      {otherParticipant.name.charAt(0).toUpperCase()}
+                      {(otherParticipant?.name || 'U').trim().charAt(0).toUpperCase()}
                     </span>
                   )}
                 </div>
@@ -2047,10 +2090,10 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
 
               {/* Name & Title */}
               <h3 className="text-xl font-bold text-white mb-1">
-                {otherParticipant.name}
+                {otherParticipant?.name || 'उपयोगकर्ता'}
               </h3>
               <p className="text-xs text-slate-400 mb-4">
-                {otherParticipant.location?.place || `${websiteName} इंटरनेट कॉल`}
+                {otherParticipant?.location?.place || `${websiteName} इंटरनेट कॉल`}
               </p>
 
               {/* Recording Status Badges */}
@@ -2192,8 +2235,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       {(callState === 'calling' ||
         callState === 'connecting' ||
         callState === 'connected') &&
-        isCallMinimized &&
-        otherParticipant && (
+        isCallMinimized && (
           <div
             className="fixed top-0 inset-x-0 z-50 flex items-center justify-between px-3.5 py-2.5 bg-slate-900/95 backdrop-blur-md text-white border-b border-teal-500/40 shadow-xl transition-all"
             style={{ paddingTop: 'max(0.625rem, env(safe-area-inset-top))' }}
@@ -2206,7 +2248,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
             >
               <div className="relative shrink-0">
                 <div className="w-9 h-9 rounded-full overflow-hidden border-2 border-teal-400 bg-slate-800 flex items-center justify-center">
-                  {otherParticipant.profile_photo ? (
+                  {otherParticipant?.profile_photo ? (
                     <img
                       src={otherParticipant.profile_photo}
                       alt={otherParticipant.name}
@@ -2214,7 +2256,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                     />
                   ) : (
                     <span className="text-sm font-bold text-white">
-                      {otherParticipant.name.charAt(0).toUpperCase()}
+                      {(otherParticipant?.name || 'U').trim().charAt(0).toUpperCase()}
                     </span>
                   )}
                 </div>
@@ -2225,7 +2267,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
 
               <div className="min-w-0 flex-1">
                 <p className="text-xs font-bold text-white truncate">
-                  {otherParticipant.name}
+                  {otherParticipant?.name || 'उपयोगकर्ता'}
                 </p>
                 <p className="text-[11px] text-teal-300 flex items-center gap-1">
                   {callState === 'calling' && 'घंटी बज रही है...'}

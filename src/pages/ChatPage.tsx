@@ -778,7 +778,13 @@ export const ChatPage: React.FC<ChatPageProps> = ({
 
   // Keep Admin profile data reactive to branding updates in conversation
   useEffect(() => {
-    if (otherUserId === ADMIN_USER_ID || otherUser?.id === ADMIN_USER_ID || otherUser?.mobile === '9149275779') {
+    const isNiveshUser =
+      otherUserId === 'a1a801bb-b759-4a9b-8aa1-f7f0ca5b08cc' ||
+      otherUser?.id === 'a1a801bb-b759-4a9b-8aa1-f7f0ca5b08cc' ||
+      (otherUser as any)?.username === '0000000009' ||
+      otherUser?.name === 'Nivesh Kumar';
+
+    if (!isNiveshUser && (otherUserId === ADMIN_USER_ID || otherUserId === 'admin' || otherUser?.id === ADMIN_USER_ID)) {
       setOtherUser((prev) => ({
         id: ADMIN_USER_ID,
         name: adminName,
@@ -789,7 +795,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
         is_worker: false,
       }));
     }
-  }, [adminName, adminPhotoUrl, otherUserId]);
+  }, [adminName, adminPhotoUrl, otherUserId, otherUser?.id, otherUser?.name]);
 
   // 1b. Asynchronously hydrate from local IndexedDB cache on mount to prevent data loss
   useEffect(() => {
@@ -803,7 +809,15 @@ export const ChatPage: React.FC<ChatPageProps> = ({
           return current;
         });
         if (snapshot.otherUser) {
-          setOtherUser((prev) => prev || snapshot.otherUser || null);
+          const isCachedNivesh =
+            otherUserId === 'a1a801bb-b759-4a9b-8aa1-f7f0ca5b08cc' ||
+            (snapshot.otherUser as any)?.username === '0000000009' ||
+            snapshot.otherUser?.name === 'Nivesh Kumar';
+          if (isCachedNivesh && snapshot.otherUser.id === ADMIN_USER_ID) {
+            // Ignore stale corrupted Admin cache for Nivesh
+          } else {
+            setOtherUser((prev) => prev || snapshot.otherUser || null);
+          }
         }
         setIsLoading(false);
       }
@@ -1475,7 +1489,15 @@ export const ChatPage: React.FC<ChatPageProps> = ({
     }
   };
 
-  const isOtherAdmin = otherUserId === ADMIN_USER_ID || otherUser?.mobile === '9149275779';
+  const isOtherNiveshNormalUser =
+    otherUserId === 'a1a801bb-b759-4a9b-8aa1-f7f0ca5b08cc' ||
+    otherUser?.id === 'a1a801bb-b759-4a9b-8aa1-f7f0ca5b08cc' ||
+    (otherUser as any)?.username === '0000000009' ||
+    otherUser?.name === 'Nivesh Kumar';
+
+  const isOtherAdmin =
+    !isOtherNiveshNormalUser &&
+    (otherUserId === ADMIN_USER_ID || otherUserId === 'admin' || otherUser?.id === ADMIN_USER_ID);
   const name = isOtherAdmin
     ? adminName
     : otherUser?.name || 'उपयोगकर्ता';
