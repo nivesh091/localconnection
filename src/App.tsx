@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { CallingProvider } from './context/CallingContext';
+import { CallingProvider, useCalling } from './context/CallingContext';
 import { Header } from './components/Header';
 import { Sidebar } from './components/Sidebar';
 import { BottomNav } from './components/BottomNav';
@@ -21,16 +21,19 @@ import { DeveloperPage } from './pages/DeveloperPage';
 import { WorkerDetailModal } from './components/WorkerDetailModal';
 import { RequirementDetailModal } from './components/RequirementDetailModal';
 import { NotificationListModal } from './components/NotificationListModal';
+import { MissedCallsModal } from './components/MissedCallsModal';
 
 import { ChatService } from './services/chatService';
 import { UserNotificationService } from './services/userNotificationService';
+import { CallingService } from './services/callingService';
 import { supabase } from './lib/supabase';
 import { usePopupBackDismiss } from './hooks/usePopupBackDismiss';
 import { PWAInstallPopup } from './components/PWAInstallPopup';
 import { NotificationPermissionBanner } from './components/NotificationPermissionBanner';
 import { NotificationService } from './services/notificationService';
 import { useWebsiteBranding } from './hooks/useWebsiteBranding';
-import { CommentReference } from './types';
+import { CommentReference, UserProfile } from './types';
+import { CallRecord } from './types/calling';
 
 // Parse URL hash/path to restore exact page/state on refresh (Point 1 & Point 5)
 export interface AppLocationState {
@@ -173,6 +176,87 @@ function AppContent() {
   const [unreadCount, setUnreadCount] = useState<number>(0);
   const [unreadNotifCount, setUnreadNotifCount] = useState<number>(0);
   const [isNotificationModalOpen, setIsNotificationModalOpen] = useState<boolean>(false);
+
+  // Missed calls popup state & calling context
+  const { startCall, callState } = useCalling();
+  const [unseenMissedCalls, setUnseenMissedCalls] = useState<CallRecord[]>([]);
+  const [isMissedCallModalOpen, setIsMissedCallModalOpen] = useState<boolean>(false);
+
+  // Check for unseen missed calls on startup and when returning to the app
+  const checkMissedCalls = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const calls = await CallingService.getUnacknowledgedMissedCalls(user.id);
+      if (calls && calls.length > 0) {
+        setUnseenMissedCalls(calls);
+        setIsMissedCallModalOpen(true);
+      } else {
+        setUnseenMissedCalls([]);
+        setIsMissedCallModalOpen(false);
+      }
+    } catch (err) {
+      console.warn('[App] Missed calls check notice:', err);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setUnseenMissedCalls([]);
+      setIsMissedCallModalOpen(false);
+      return;
+    }
+
+    // Delay briefly so initial auth and real-time subscription setup settle
+    const initialTimer = setTimeout(() => {
+      checkMissedCalls();
+    }, 600);
+
+    // Check when user returns/switches back to the app window/tab
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        checkMissedCalls();
+      }
+    };
+    const handleFocus = () => {
+      checkMissedCalls();
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    window.addEventListener('focus', handleFocus);
+
+    // Listen for call termination events (e.g. if an incoming call just timed out or was missed)
+    const handleCallUpdated = (e: any) => {
+      if (e?.detail?.status === 'missed') {
+        checkMissedCalls();
+      }
+    };
+    window.addEventListener('km_call_updated', handleCallUpdated);
+
+    return () => {
+      clearTimeout(initialTimer);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('km_call_updated', handleCallUpdated);
+    };
+  }, [user?.id, checkMissedCalls]);
+
+  // Sync push subscription with server for active user to ensure background incoming calls reach device
+  useEffect(() => {
+    if (!user?.id) return;
+    const syncPush = () => {
+      if (NotificationService.isSupported() && Notification.permission === 'granted') {
+        NotificationService.registerPushSubscription(user.id).catch(() => {});
+      }
+    };
+    syncPush();
+    const handleVis = () => {
+      if (document.visibilityState === 'visible') syncPush();
+    };
+    document.addEventListener('visibilitychange', handleVis);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVis);
+    };
+  }, [user?.id]);
 
   // Real-time unread notification count for Bell icon (Worker & Requirement Comments)
   useEffect(() => {
@@ -436,6 +520,38 @@ function AppContent() {
     setLocationState(parseLocationState());
   };
 
+  // Acknowledge and close missed calls popup
+  const handleCloseMissedCalls = () => {
+    if (user?.id && unseenMissedCalls.length > 0) {
+      CallingService.acknowledgeMissedCalls(
+        user.id,
+        unseenMissedCalls.map((c) => c.id)
+      );
+    }
+    setIsMissedCallModalOpen(false);
+    setUnseenMissedCalls([]);
+  };
+
+  // Call back caller from missed calls popup
+  const handleCallBackFromMissed = async (callerProfile: UserProfile) => {
+    handleCloseMissedCalls();
+    try {
+      await startCall(callerProfile);
+    } catch (err) {
+      console.warn('[App] Callback from missed call modal notice:', err);
+    }
+  };
+
+  // Open chat with caller from missed calls popup
+  const handleOpenChatFromMissed = (callerUserId: string, conversationId?: string) => {
+    handleCloseMissedCalls();
+    if (conversationId) {
+      handleOpenConversation(conversationId, callerUserId);
+    } else {
+      handleOpenChat(callerUserId);
+    }
+  };
+
   // Track active fullscreen chat conversation state
   const isChatConversationActive = activeTab === 'chat' && Boolean(activeConversation);
 
@@ -660,6 +776,17 @@ function AppContent() {
             });
           }}
           onUnreadCountChange={(c) => setUnreadNotifCount(c)}
+        />
+      )}
+
+      {/* Missed Calls Popup on App Open / Return */}
+      {user && isMissedCallModalOpen && unseenMissedCalls.length > 0 && (
+        <MissedCallsModal
+          missedCalls={unseenMissedCalls}
+          isOpen={isMissedCallModalOpen}
+          onClose={handleCloseMissedCalls}
+          onCallBack={handleCallBackFromMissed}
+          onOpenChat={handleOpenChatFromMissed}
         />
       )}
     </div>

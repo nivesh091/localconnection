@@ -34,14 +34,64 @@ webpush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 const app = express();
 app.use(express.json());
 
-// In-memory subscription store per user (ensures multi-device push works even before DB migration)
+// In-memory subscription store per user (backed by local disk persistence)
 interface StoredSubscription {
   userId: string;
   subscription: webpush.PushSubscription;
   userAgent?: string;
   createdAt: number;
 }
-const userSubscriptionsMap = new Map<string, StoredSubscription[]>();
+
+const PUSH_STORE_PATH = path.join(__dirname, '.data', 'push_subscriptions.json');
+
+function loadPersistedSubs(): Map<string, StoredSubscription[]> {
+  const map = new Map<string, StoredSubscription[]>();
+  try {
+    if (fs.existsSync(PUSH_STORE_PATH)) {
+      const raw = fs.readFileSync(PUSH_STORE_PATH, 'utf-8');
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object') {
+        for (const [k, v] of Object.entries(parsed)) {
+          if (Array.isArray(v)) {
+            map.set(
+              k,
+              v.map((item: any) => ({
+                userId: k,
+                subscription: item.subscription || item,
+                userAgent: item.userAgent,
+                createdAt: item.createdAt || Date.now(),
+              }))
+            );
+          }
+        }
+      }
+    }
+  } catch (e) {
+    console.warn('[PushStore] Error reading subscriptions file:', e);
+  }
+  return map;
+}
+
+function savePersistedSubs(map: Map<string, StoredSubscription[]>) {
+  try {
+    const dir = path.dirname(PUSH_STORE_PATH);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    const obj: Record<string, any[]> = {};
+    for (const [k, v] of map.entries()) {
+      obj[k] = v.map((item) => ({
+        endpoint: item.subscription.endpoint,
+        keys: item.subscription.keys,
+        userAgent: item.userAgent,
+        createdAt: item.createdAt,
+      }));
+    }
+    fs.writeFileSync(PUSH_STORE_PATH, JSON.stringify(obj, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('[PushStore] Error writing subscriptions file:', e);
+  }
+}
+
+const userSubscriptionsMap = loadPersistedSubs();
 
 // ----------------------------------------------------------------------------
 // PUSH API ROUTES
@@ -71,6 +121,7 @@ app.post('/api/push/subscribe', (req, res) => {
     createdAt: Date.now(),
   });
   userSubscriptionsMap.set(userId, filtered);
+  savePersistedSubs(userSubscriptionsMap);
 
   res.json({ success: true });
 });
@@ -87,6 +138,7 @@ app.post('/api/push/unsubscribe', (req, res) => {
   const existing = userSubscriptionsMap.get(userId) || [];
   const updated = existing.filter((s) => s.subscription.endpoint !== endpoint);
   userSubscriptionsMap.set(userId, updated);
+  savePersistedSubs(userSubscriptionsMap);
 
   res.json({ success: true });
 });
@@ -151,17 +203,21 @@ app.post('/api/push/send', async (req, res) => {
 
   let deliveredCount = 0;
   const deadEndpoints: string[] = [];
+  const isIncomingCall = data?.type === 'incoming_call' || tag?.startsWith('call_');
+  const pushTtl = isIncomingCall ? 120 : 60 * 60 * 24; // 120s for calls to prevent stale ring, 24h for messages
 
-  const promises = subs.map(async (item) => {
+  const promises = subs.map(async (item: any) => {
+    const targetSub = item.subscription || item;
+    if (!targetSub?.endpoint) return;
     try {
-      await webpush.sendNotification(item.subscription, payloadString, {
-        TTL: 60 * 60 * 24, // 24 hours
+      await webpush.sendNotification(targetSub, payloadString, {
+        TTL: pushTtl,
         urgency: 'high',
       });
       deliveredCount++;
     } catch (err: any) {
       if (err.statusCode === 410 || err.statusCode === 404) {
-        deadEndpoints.push(item.subscription.endpoint);
+        deadEndpoints.push(targetSub.endpoint);
       } else {
         console.warn('[WebPush] Delivery warning:', err.message || err);
       }
@@ -172,8 +228,12 @@ app.post('/api/push/send', async (req, res) => {
 
   // Clean up expired subscriptions
   if (deadEndpoints.length > 0) {
-    const updated = subs.filter((s) => !deadEndpoints.includes(s.subscription.endpoint));
+    const updated = subs.filter((s: any) => {
+      const ep = s.subscription?.endpoint || s.endpoint;
+      return ep && !deadEndpoints.includes(ep);
+    });
     userSubscriptionsMap.set(recipientId, updated);
+    savePersistedSubs(userSubscriptionsMap);
   }
 
   res.json({ success: true, delivered: deliveredCount });

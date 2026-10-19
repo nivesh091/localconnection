@@ -1,6 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import {defineConfig} from 'vite';
 import {VitePWA} from 'vite-plugin-pwa';
@@ -117,7 +118,42 @@ export default defineConfig(async () => {
               return;
             }
 
-            const devPushSubs = (globalThis as any).__devPushSubs || new Map();
+            const PUSH_STORE_PATH = path.join(__dirname, '.data', 'push_subscriptions.json');
+
+            const loadPersistedSubs = (): Map<string, any[]> => {
+              const map = new Map<string, any[]>();
+              try {
+                if (fs.existsSync(PUSH_STORE_PATH)) {
+                  const raw = fs.readFileSync(PUSH_STORE_PATH, 'utf-8');
+                  const parsed = JSON.parse(raw);
+                  if (parsed && typeof parsed === 'object') {
+                    for (const [k, v] of Object.entries(parsed)) {
+                      if (Array.isArray(v)) map.set(k, v);
+                    }
+                  }
+                }
+              } catch (e) {
+                console.warn('[PushStore] File read notice:', e);
+              }
+              return map;
+            };
+
+            const savePersistedSubs = (map: Map<string, any[]>) => {
+              try {
+                const dir = path.dirname(PUSH_STORE_PATH);
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+                const obj: Record<string, any[]> = {};
+                for (const [k, v] of map.entries()) {
+                  obj[k] = v;
+                }
+                fs.writeFileSync(PUSH_STORE_PATH, JSON.stringify(obj, null, 2), 'utf-8');
+              } catch (e) {
+                console.warn('[PushStore] File write notice:', e);
+              }
+            };
+
+            const devPushSubs: Map<string, any[]> =
+              (globalThis as any).__devPushSubs || loadPersistedSubs();
             (globalThis as any).__devPushSubs = devPushSubs;
 
             if (url === '/api/push/subscribe' && req.method === 'POST') {
@@ -126,11 +162,13 @@ export default defineConfig(async () => {
               req.on('end', () => {
                 try {
                   const parsed = JSON.parse(body || '{}');
-                  if (parsed.userId && parsed.subscription) {
+                  if (parsed.userId && parsed.subscription && parsed.subscription.endpoint) {
                     const existing = devPushSubs.get(parsed.userId) || [];
                     const filtered = existing.filter((s: any) => s.endpoint !== parsed.subscription.endpoint);
                     filtered.push(parsed.subscription);
                     devPushSubs.set(parsed.userId, filtered);
+                    savePersistedSubs(devPushSubs);
+                    console.log(`[WebPush] Subscribed user ${parsed.userId}. Active endpoints: ${filtered.length}`);
                   }
                 } catch {}
                 res.setHeader('Content-Type', 'application/json');
@@ -147,7 +185,9 @@ export default defineConfig(async () => {
                   const parsed = JSON.parse(body || '{}');
                   if (parsed.userId && parsed.endpoint) {
                     const existing = devPushSubs.get(parsed.userId) || [];
-                    devPushSubs.set(parsed.userId, existing.filter((s: any) => s.endpoint !== parsed.endpoint));
+                    const updated = existing.filter((s: any) => s.endpoint !== parsed.endpoint);
+                    devPushSubs.set(parsed.userId, updated);
+                    savePersistedSubs(devPushSubs);
                   }
                 } catch {}
                 res.setHeader('Content-Type', 'application/json');
@@ -163,24 +203,19 @@ export default defineConfig(async () => {
                 try {
                   const { recipientId, title, body: msgBody, icon, badge, tag, data } = JSON.parse(body || '{}');
                   let subs = devPushSubs.get(recipientId) || [];
+
+                  // If in-memory is empty, re-check disk store
                   if (subs.length === 0) {
-                    try {
-                      const supabaseUrl = process.env.VITE_SUPABASE_URL || 'https://hhvxanktvbncyeedzzdf.supabase.co';
-                      const supabaseKey = process.env.VITE_SUPABASE_PUBLISHABLE_KEY || 'sb_publishable_cdXk34V8WeafviYplVRbig_fcDmRDj0';
-                      const r = await fetch(`${supabaseUrl}/rest/v1/push_subscriptions?user_id=eq.${recipientId}&select=endpoint,p256dh,auth`, {
-                        headers: { apikey: supabaseKey, Authorization: `Bearer ${supabaseKey}` }
-                      });
-                      if (r.ok) {
-                        const rows = await r.json();
-                        if (Array.isArray(rows) && rows.length > 0) {
-                          subs = rows.map((row: any) => ({
-                            endpoint: row.endpoint,
-                            keys: { p256dh: row.p256dh, auth: row.auth }
-                          }));
-                          devPushSubs.set(recipientId, subs);
-                        }
-                      }
-                    } catch {}
+                    const refreshed = loadPersistedSubs();
+                    subs = refreshed.get(recipientId) || [];
+                    if (subs.length > 0) devPushSubs.set(recipientId, subs);
+                  }
+
+                  if (subs.length === 0) {
+                    console.log(`[WebPush] No subscription found for recipient: ${recipientId}`);
+                    res.setHeader('Content-Type', 'application/json');
+                    res.end(JSON.stringify({ success: true, delivered: 0, reason: 'No registered subscription' }));
+                    return;
                   }
 
                   const vapidPub = process.env.VAPID_PUBLIC_KEY || process.env.VITE_VAPID_PUBLIC_KEY || 'BIj-hKqgD1VNvcGsg_3Z5zzyBE57jQoTfJ6EDMGZ6k9n99d1EUxKO9G6k_HxCyrUFi9kXXP_raZu9Qyv2y2M0o0';
@@ -194,16 +229,40 @@ export default defineConfig(async () => {
                     icon: icon || '/pwa-192x192.png',
                     badge: badge || '/favicon.ico',
                     tag: tag || 'kaammitra_notification',
+                    type: data?.type || 'notification',
                     data: data || {},
                   });
 
                   let sent = 0;
+                  const deadEndpoints: string[] = [];
+                  const isIncomingCall = data?.type === 'incoming_call' || tag?.startsWith('call_');
+                  const pushTtl = isIncomingCall ? 120 : 86400;
+
                   for (const sub of subs) {
+                    const targetSub = sub?.subscription || sub;
+                    if (!targetSub?.endpoint) continue;
                     try {
-                      await webpush.sendNotification(sub, payload, { TTL: 86400, urgency: 'high' });
+                      await webpush.sendNotification(targetSub, payload, { TTL: pushTtl, urgency: 'high' });
                       sent++;
-                    } catch {}
+                    } catch (pushErr: any) {
+                      console.warn('[WebPush] Send notification error:', pushErr?.statusCode, pushErr?.message);
+                      if (pushErr?.statusCode === 410 || pushErr?.statusCode === 404) {
+                        deadEndpoints.push(targetSub.endpoint);
+                      }
+                    }
                   }
+
+                  // Prune dead subscriptions
+                  if (deadEndpoints.length > 0) {
+                    const activeSubs = subs.filter((s: any) => {
+                      const ep = s?.subscription?.endpoint || s?.endpoint;
+                      return ep && !deadEndpoints.includes(ep);
+                    });
+                    devPushSubs.set(recipientId, activeSubs);
+                    savePersistedSubs(devPushSubs);
+                    console.log(`[WebPush] Pruned ${deadEndpoints.length} expired subscription(s) for user ${recipientId}`);
+                  }
+
                   res.setHeader('Content-Type', 'application/json');
                   res.end(JSON.stringify({ success: true, delivered: sent }));
                 } catch (e: any) {
@@ -220,7 +279,12 @@ export default defineConfig(async () => {
               req.on('end', async () => {
                 try {
                   const { recipientId, callId } = JSON.parse(body || '{}');
-                  const subs = devPushSubs.get(recipientId) || [];
+                  let subs = devPushSubs.get(recipientId) || [];
+                  if (subs.length === 0) {
+                    const refreshed = loadPersistedSubs();
+                    subs = refreshed.get(recipientId) || [];
+                  }
+
                   const vapidPub = process.env.VAPID_PUBLIC_KEY || process.env.VITE_VAPID_PUBLIC_KEY || 'BIj-hKqgD1VNvcGsg_3Z5zzyBE57jQoTfJ6EDMGZ6k9n99d1EUxKO9G6k_HxCyrUFi9kXXP_raZu9Qyv2y2M0o0';
                   const vapidPriv = process.env.VAPID_PRIVATE_KEY || 'Hgtds1t5TlEd9xkNBIDQVtY-jCgW64n5cRJv99zfsBc';
                   const vapidSub = process.env.VAPID_SUBJECT || 'mailto:niveshkumar1230@gmail.com';
@@ -228,8 +292,10 @@ export default defineConfig(async () => {
 
                   const payload = JSON.stringify({ action: 'close_call', callId, tag: `call_${callId}` });
                   for (const sub of subs) {
+                    const targetSub = sub?.subscription || sub;
+                    if (!targetSub?.endpoint) continue;
                     try {
-                      await webpush.sendNotification(sub, payload, { TTL: 60 });
+                      await webpush.sendNotification(targetSub, payload, { TTL: 60 });
                     } catch {}
                   }
                 } catch {}
@@ -278,6 +344,7 @@ export default defineConfig(async () => {
           ],
         },
         workbox: {
+          maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2,jpg,jpeg,webp}'],
           importScripts: ['/sw-push.js'],
           cleanupOutdatedCaches: true,

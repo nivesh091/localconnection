@@ -64,12 +64,20 @@ self.addEventListener('push', function (event) {
     }
   }
 
+  // Handle stale call events safely (prevent ghost rings if device was offline or push delayed)
+  var callTimestamp = (data.data && data.data.timestamp) || data.timestamp;
+  if (isIncomingCall && callTimestamp && Date.now() - callTimestamp > 45000) {
+    console.log('[SW] Stale incoming call notification ignored (>45s old)');
+    return;
+  }
+
   var options = {
     body: body,
     icon: icon,
     badge: badge,
     tag: tag,
     renotify: true,
+    requireInteraction: Boolean(isIncomingCall),
     data: {
       url: targetUrl,
       conversationId: conversationId,
@@ -84,6 +92,12 @@ self.addEventListener('push', function (event) {
       timestamp: Date.now(),
     },
     vibrate: isIncomingCall ? [500, 250, 500, 250, 500] : [200, 100, 200],
+    actions: isIncomingCall
+      ? [
+          { action: 'answer', title: 'कॉल उठाएं (Answer)' },
+          { action: 'decline', title: 'अस्वीकार (Decline)' },
+        ]
+      : [],
     timestamp: Date.now(),
   };
 
@@ -101,14 +115,34 @@ self.addEventListener('notificationclick', function (event) {
   var conversationId = notificationData.conversationId || '';
   var senderId = notificationData.senderId || '';
   var callId = notificationData.callId || '';
+  var isIncomingCall = notificationData.isIncomingCall;
+  var action = event.action;
+
+  // Handle explicit decline action from notification action button
+  if (action === 'decline' && callId) {
+    // Dismiss all notifications for this call
+    event.waitUntil(
+      self.registration.getNotifications().then(function (notifications) {
+        notifications.forEach(function (n) {
+          if (n.tag === 'call_' + callId || (n.data && n.data.callId === callId)) {
+            n.close();
+          }
+        });
+      })
+    );
+    return;
+  }
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (clientList) {
-      // 1. If a window is already open, focus it and post a navigation message
+      // 1. If a window is already open, focus it and navigate/post message
       for (var i = 0; i < clientList.length; i++) {
         var client = clientList[i];
         if ('focus' in client) {
           client.focus();
+          if ('navigate' in client && targetUrl) {
+            client.navigate(targetUrl);
+          }
           if (callId) {
             client.postMessage({
               type: 'NAVIGATE_CALL',

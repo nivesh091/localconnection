@@ -12,6 +12,7 @@ import { invalidateChatCaches, ChatService } from './chatService';
 import { AdminService } from './adminService';
 import { NotificationService } from './notificationService';
 import { brandingStore } from './brandingService';
+import { ProfileService } from './profileService';
 
 const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -1364,5 +1365,166 @@ export class CallingService {
     const val = safeStorage.getItem(`km_call_${key}_${userId}`);
     if (val === null) return null;
     return val === 'true';
+  }
+
+  /**
+   * Get set of call IDs that the user has already acknowledged/dismissed
+   */
+  public static getAcknowledgedMissedCallIds(userId: string): Set<string> {
+    try {
+      const raw = safeStorage.getItem(`km_ack_missed_calls_${userId}`);
+      if (!raw) return new Set();
+      const arr = JSON.parse(raw);
+      return new Set(Array.isArray(arr) ? arr : []);
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * Mark a list of missed call IDs as acknowledged so they are not shown again
+   */
+  public static acknowledgeMissedCalls(userId: string, callIds: string[]): void {
+    if (!userId || !callIds || callIds.length === 0) return;
+    try {
+      const set = this.getAcknowledgedMissedCallIds(userId);
+      callIds.forEach((id) => {
+        if (id) set.add(id);
+      });
+      safeStorage.setItem(`km_ack_missed_calls_${userId}`, JSON.stringify(Array.from(set)));
+    } catch (err) {
+      console.warn('[CallingService] Error acknowledging missed calls:', err);
+    }
+  }
+
+  /**
+   * Retrieve all unseen, unacknowledged missed calls belonging to this user
+   */
+  public static async getUnacknowledgedMissedCalls(userId: string): Promise<CallRecord[]> {
+    if (!userId) return [];
+    try {
+      const deletedIds = this.getDeletedCallIds(userId);
+      const ackIds = this.getAcknowledgedMissedCallIds(userId);
+
+      // Query calls where current user is receiver
+      const { data, error } = await supabase
+        .from('calls')
+        .select(`
+          id,
+          caller_id,
+          receiver_id,
+          conversation_id,
+          status,
+          started_at,
+          answered_at,
+          connected_at,
+          ended_at,
+          duration_seconds,
+          ended_reason,
+          end_reason,
+          created_at,
+          caller:profiles!calls_caller_id_fkey(id, name, profile_photo, mobile)
+        `)
+        .eq('receiver_id', userId)
+        .order('created_at', { ascending: false })
+        .limit(40);
+
+      if (error) {
+        // Fallback without relation join if relation name varies in PostgREST schema cache
+        console.warn('[CallingService] getUnacknowledgedMissedCalls joined query note:', error.message);
+        const { data: fallbackData, error: fallbackError } = await supabase
+          .from('calls')
+          .select('*')
+          .eq('receiver_id', userId)
+          .order('created_at', { ascending: false })
+          .limit(40);
+
+        if (fallbackError || !fallbackData) {
+          return [];
+        }
+        return await this.filterAndHydrateMissedCalls(fallbackData, userId, deletedIds, ackIds);
+      }
+
+      return await this.filterAndHydrateMissedCalls(data || [], userId, deletedIds, ackIds);
+    } catch (err) {
+      console.warn('[CallingService] getUnacknowledgedMissedCalls error:', err);
+      return [];
+    }
+  }
+
+  /**
+   * Filter call rows to strictly eligible missed calls for the receiver and hydrate caller profiles
+   */
+  private static async filterAndHydrateMissedCalls(
+    rawCalls: any[],
+    userId: string,
+    deletedIds: Set<string>,
+    ackIds: Set<string>
+  ): Promise<CallRecord[]> {
+    const now = Date.now();
+    const missedList: CallRecord[] = [];
+    const seenIds = new Set<string>();
+
+    for (const call of rawCalls) {
+      if (!call || !call.id || seenIds.has(call.id)) continue;
+      seenIds.add(call.id);
+
+      // 1. Must be the receiver, NOT the caller (strictly excludes cancelled outgoing calls)
+      if (call.receiver_id !== userId || call.caller_id === userId) {
+        continue;
+      }
+
+      // 2. Exclude already deleted or acknowledged calls
+      if (deletedIds.has(call.id) || ackIds.has(call.id)) {
+        continue;
+      }
+
+      // 3. Must NOT have been answered successfully
+      if (call.answered_at || call.connected_at || (call.duration_seconds && call.duration_seconds > 0)) {
+        continue;
+      }
+
+      // 4. Must NOT have been rejected
+      const endedReason = call.ended_reason || call.end_reason || '';
+      if (call.status === 'rejected' || endedReason === 'rejected') {
+        continue;
+      }
+
+      // 5. Must be a missed call:
+      // - status is 'missed'
+      // - or status is 'ended' (ended without answer or rejection)
+      // - or status is 'calling'/'ringing' that started more than 45 seconds ago (abandoned/unanswered)
+      let isEligible = false;
+      if (call.status === 'missed') {
+        isEligible = true;
+      } else if (call.status === 'ended') {
+        isEligible = true;
+      } else if (call.status === 'calling' || call.status === 'ringing') {
+        const callStartTime = new Date(call.started_at || call.created_at).getTime();
+        if (!isNaN(callStartTime) && now - callStartTime > 45000) {
+          isEligible = true;
+        }
+      }
+
+      if (!isEligible) continue;
+
+      // 6. Hydrate caller profile with proper identity resolution (never default to Admin)
+      let callerProfile = call.caller;
+      if (!callerProfile || !callerProfile.name) {
+        try {
+          const fetched = await ProfileService.getProfile(call.caller_id);
+          if (fetched) {
+            callerProfile = fetched;
+          }
+        } catch {}
+      }
+
+      missedList.push({
+        ...call,
+        caller: callerProfile || null,
+      });
+    }
+
+    return missedList;
   }
 }

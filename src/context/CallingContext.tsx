@@ -14,6 +14,7 @@ import {
   PhoneOff,
   Mic,
   MicOff,
+  Volume1,
   Volume2,
   VolumeX,
   Disc,
@@ -149,6 +150,10 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
   const remoteStreamRef = useRef<MediaStream | null>(null);
   const audioElementRef = useRef<HTMLAudioElement | null>(null);
   const recorderRef = useRef<CallAudioRecorder | null>(null);
+  const speakerAudioCtxRef = useRef<AudioContext | null>(null);
+  const speakerGainNodeRef = useRef<GainNode | null>(null);
+  const backdropPointerDownRef = useRef<boolean>(false);
+  const wakeLockRef = useRef<any>(null);
 
   // State refs to avoid stale closures in event listeners & subscriptions
   const activeCallRef = useRef<CallRecord | null>(null);
@@ -465,10 +470,10 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     const el = audioElementRef.current as any;
     if (!el) return;
 
-    // 1. Audio Session API (W3C VoIP mode for mobile browsers)
+    // 1. Audio Session API (W3C VoIP mode for mobile browsers: 'playback' for loudspeaker vs 'play-and-record' for earpiece)
     if (typeof navigator !== 'undefined' && 'audioSession' in navigator && (navigator as any).audioSession) {
       try {
-        (navigator as any).audioSession.type = 'play-and-record';
+        (navigator as any).audioSession.type = speaker ? 'playback' : 'play-and-record';
       } catch {}
     }
 
@@ -484,7 +489,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
               d.deviceId !== 'default' &&
               (d.label.toLowerCase().includes('speaker') ||
                 d.label.toLowerCase().includes('loudspeaker') ||
-                d.label.toLowerCase().includes('hands-free'))
+                d.label.toLowerCase().includes('hands-free') ||
+                d.label.toLowerCase().includes('external'))
           );
           if (speakerDevice?.deviceId) {
             await el.setSinkId(speakerDevice.deviceId);
@@ -495,10 +501,12 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
           // Normal mode: search for earpiece / internal receiver
           const earpieceDevice = audioOutputs.find(
             (d) =>
-              d.label.toLowerCase().includes('earpiece') ||
-              d.label.toLowerCase().includes('receiver') ||
-              d.label.toLowerCase().includes('phone') ||
-              d.label.toLowerCase().includes('internal')
+              d.deviceId !== 'default' &&
+              (d.label.toLowerCase().includes('earpiece') ||
+                d.label.toLowerCase().includes('receiver') ||
+                d.label.toLowerCase().includes('phone') ||
+                d.label.toLowerCase().includes('internal') ||
+                d.label.toLowerCase().includes('handset'))
           );
           if (earpieceDevice?.deviceId) {
             await el.setSinkId(earpieceDevice.deviceId);
@@ -508,11 +516,20 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         }
       } catch (sinkErr) {
         console.warn('[WebRTC-Call] Audio output routing notice:', sinkErr);
+      } finally {
+        // Chromium may pause the audio element on setSinkId change; ensure playback continues!
+        if (el.paused) {
+          el.play().catch(() => {});
+        }
       }
     }
 
-    // 3. Volume scaling: speakerphone gets 1.0; normal earpiece mode gets 0.65 to prevent loud speaker blast
-    el.volume = speaker ? 1.0 : 0.65;
+    // 3. Audio volume & unmute guarantee: Maintain 1.0 volume for full audibility in both modes
+    el.muted = false;
+    el.volume = 1.0;
+    if (el.paused) {
+      el.play().catch(() => {});
+    }
   }, []);
 
   // Re-evaluate audio device routing if devices change (e.g. bluetooth or headphones plugged/unplugged)
@@ -529,6 +546,73 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       };
     }
   }, [applyAudioOutputRouting]);
+
+  // Screen Wake Lock API: Keeps screen awake during active calls so the mobile OS does not sleep & suspend microphone
+  const requestWakeLock = useCallback(async () => {
+    if (typeof navigator !== 'undefined' && 'wakeLock' in navigator) {
+      const docVis = typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+      console.log(`[WebRTC-Diagnostic] requestWakeLock invoked. docVisibility=${docVis}, wakeLockSupported=true`);
+      try {
+        if (!wakeLockRef.current || wakeLockRef.current.released) {
+          const lock = await (navigator as any).wakeLock.request('screen');
+          wakeLockRef.current = lock;
+          console.log(`[WebRTC-Diagnostic] Screen Wake Lock granted! type=${lock.type}, released=${lock.released}, docVisibility=${docVis}`);
+          lock.addEventListener('release', () => {
+            const curVis = typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+            console.log(`[WebRTC-Diagnostic] Screen Wake Lock release event fired! docVisibility=${curVis}, lockReleased=${lock.released}`);
+          });
+        }
+      } catch (err: any) {
+        console.warn(`[WebRTC-Diagnostic] Screen Wake Lock request rejected: ${err?.name}: ${err?.message}, docVisibility=${docVis}`);
+      }
+    } else {
+      console.warn('[WebRTC-Diagnostic] Screen Wake Lock API not supported on this platform/browser');
+    }
+  }, []);
+
+  const releaseWakeLock = useCallback(() => {
+    if (wakeLockRef.current) {
+      try {
+        wakeLockRef.current.release();
+      } catch {}
+      wakeLockRef.current = null;
+      console.log('[WebRTC-Diagnostic] Screen Wake Lock manually released');
+    }
+  }, []);
+
+  // Track event listeners for local microphone capture state
+  const attachLocalTrackListeners = useCallback((track: MediaStreamTrack) => {
+    track.onmute = () => {
+      const curVis = typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+      console.warn(
+        `[WebRTC-Diagnostic] Local audio track 'mute' event! readyState=${track.readyState}, enabled=${track.enabled}, muted=${track.muted}, docVisibility=${curVis}`
+      );
+    };
+    track.onunmute = () => {
+      const curVis = typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+      console.log(
+        `[WebRTC-Diagnostic] Local audio track 'unmute' event! readyState=${track.readyState}, enabled=${track.enabled}, muted=${track.muted}, docVisibility=${curVis}`
+      );
+      if (!isMutedRef.current && !track.enabled) {
+        track.enabled = true;
+      }
+    };
+    track.onended = () => {
+      const curVis = typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+      console.warn(
+        `[WebRTC-Diagnostic] Local audio track 'ended' event! readyState=${track.readyState}, docVisibility=${curVis}`
+      );
+    };
+  }, []);
+
+  // Screen Wake Lock lifecycle during call
+  useEffect(() => {
+    if (callState === 'connected') {
+      requestWakeLock();
+    } else if (callState === 'idle' || callState === 'ended') {
+      releaseWakeLock();
+    }
+  }, [callState, requestWakeLock, releaseWakeLock]);
 
   // MediaSession API and Screen-off Lifecycle Handler (Issue 2)
   useEffect(() => {
@@ -573,25 +657,92 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     }
   }, [callState, otherParticipant?.name, websiteName]);
 
-  // Keep Call Audio Transmitting & Receiving when Mobile Screen Turns Off or Tab Backgrounds (Issue 2)
+  // Keep Call Audio Transmitting & Receiving when Mobile Screen Turns Off, Locks, or Returns to Foreground
   useEffect(() => {
     const handleLifecycle = () => {
       if (callStateRef.current === 'connected') {
-        // 1. Verify and keep local mic tracks active (strictly respect user's intentional mute state)
-        if (localStreamRef.current) {
-          localStreamRef.current.getAudioTracks().forEach((track) => {
-            if (!isMutedRef.current && !track.enabled) {
-              track.enabled = true;
+        const isVisible = typeof document !== 'undefined' ? document.visibilityState === 'visible' : true;
+        const curVis = typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+        const localTrack = localStreamRef.current?.getAudioTracks()[0];
+        const pc = peerConnectionRef.current;
+        const audioSender =
+          pc?.getSenders().find((s) => s.track && s.track.kind === 'audio') ||
+          pc?.getSenders().find((s) => s.track === null);
+
+        console.log(
+          `[WebRTC-Diagnostic] handleLifecycle event. docVisibility=${curVis}, callState=${callStateRef.current}, ` +
+          `localTrack={id: ${localTrack?.id}, readyState: ${localTrack?.readyState}, enabled: ${localTrack?.enabled}, muted: ${localTrack?.muted}}, ` +
+          `senderTrack={id: ${audioSender?.track?.id}, readyState: ${audioSender?.track?.readyState}, muted: ${audioSender?.track?.muted}}, ` +
+          `pc={connState: ${pc?.connectionState}, iceState: ${pc?.iceConnectionState}}`
+        );
+
+        if (isVisible) {
+          // 1. Re-acquire Screen Wake Lock when screen wakes up / page returns to visible
+          requestWakeLock();
+
+          // 2. Inspect local microphone track and WebRTC audio sender
+          if (localTrack && localTrack.readyState === 'live') {
+            // Track is still live: ensure enabled unless user explicitly pressed mute
+            if (!isMutedRef.current && !localTrack.enabled) {
+              localTrack.enabled = true;
             }
-          });
+            // Ensure WebRTC audio sender still points to this live track
+            if (pc) {
+              if (audioSender && audioSender.track !== localTrack) {
+                console.log('[WebRTC-Diagnostic] Re-attaching live microphone track to WebRTC audio sender');
+                audioSender.replaceTrack(localTrack).catch((err) => {
+                  console.warn('[WebRTC-Diagnostic] Error replacing track on sender:', err);
+                });
+              }
+            }
+          } else if (!localTrack || localTrack.readyState === 'ended') {
+            // OS completely terminated the track during deep sleep. Reacquire fresh track without renegotiation
+            console.warn('[WebRTC-Diagnostic] Local microphone track ended during sleep. Reacquiring fresh track for WebRTC sender...');
+            navigator.mediaDevices
+              ?.getUserMedia({
+                audio: {
+                  echoCancellation: true,
+                  noiseSuppression: true,
+                  autoGainControl: true,
+                },
+                video: false,
+              })
+              .then((newStream) => {
+                if (callStateRef.current !== 'connected') {
+                  newStream.getTracks().forEach((t) => t.stop());
+                  return;
+                }
+                const newTrack = newStream.getAudioTracks()[0];
+                if (newTrack) {
+                  newTrack.enabled = !isMutedRef.current;
+                  attachLocalTrackListeners(newTrack);
+                  localStreamRef.current = newStream;
+                  const activePc = peerConnectionRef.current;
+                  if (activePc) {
+                    const activeSender =
+                      activePc.getSenders().find((s) => s.track && s.track.kind === 'audio') ||
+                      activePc.getSenders().find((s) => s.track === null);
+                    if (activeSender) {
+                      activeSender.replaceTrack(newTrack).catch((err) => {
+                        console.warn('[WebRTC-Diagnostic] Error replacing track after screen unlock:', err);
+                      });
+                    }
+                  }
+                }
+              })
+              .catch((err) => {
+                console.error('[WebRTC-Diagnostic] Failed to reacquire microphone on screen unlock:', err);
+              });
+          }
         }
-        // 2. Verify remote audio element is playing
+
+        // 3. Verify remote audio element is playing
         if (audioElementRef.current && remoteStreamRef.current) {
           if (audioElementRef.current.paused) {
             audioElementRef.current.play().catch(() => {});
           }
         }
-        // 3. Resume AudioContext in recorder if suspended
+        // 4. Resume AudioContext in recorder if suspended
         if (recorderRef.current) {
           recorderRef.current.resumeAudioContext();
         }
@@ -619,7 +770,43 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       document.removeEventListener('visibilitychange', handleLifecycle);
       window.removeEventListener('pageshow', handleLifecycle);
     };
-  }, []);
+  }, [requestWakeLock, attachLocalTrackListeners]);
+
+  // Diagnostics: Monitor WebRTC outbound-rtp audio statistics to verify packet flow vs screen lock
+  useEffect(() => {
+    if (callState !== 'connected') return;
+
+    const statsInterval = setInterval(async () => {
+      const pc = peerConnectionRef.current;
+      if (!pc || pc.connectionState === 'closed') return;
+
+      try {
+        const stats = await pc.getStats();
+        let outboundAudioStats: any = null;
+        stats.forEach((report) => {
+          if (report.type === 'outbound-rtp' && (report.kind === 'audio' || report.mediaType === 'audio')) {
+            outboundAudioStats = report;
+          }
+        });
+
+        const track = localStreamRef.current?.getAudioTracks()[0];
+        const audioSender = pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
+        const curVis = typeof document !== 'undefined' ? document.visibilityState : 'unknown';
+
+        if (outboundAudioStats) {
+          console.log(
+            `[WebRTC-Diagnostic] Outbound-RTP: packetsSent=${outboundAudioStats.packetsSent}, bytesSent=${outboundAudioStats.bytesSent}, ` +
+            `docVisibility=${curVis}, trackReadyState=${track?.readyState}, trackEnabled=${track?.enabled}, trackMuted=${track?.muted}, ` +
+            `senderTrackAttached=${Boolean(audioSender?.track)}`
+          );
+        }
+      } catch {}
+    }, 3000);
+
+    return () => {
+      clearInterval(statsInterval);
+    };
+  }, [callState]);
 
   // Cleanup helper
   const cleanupCall = useCallback(() => {
@@ -694,6 +881,8 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       } catch {}
     }
 
+    releaseWakeLock();
+
     if (reconnectionTimeoutRef.current) {
       clearTimeout(reconnectionTimeoutRef.current);
       reconnectionTimeoutRef.current = null;
@@ -704,7 +893,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     if (user?.id) {
       ChatService.invalidateConversationsCache(user.id);
     }
-  }, [user?.id]);
+  }, [user?.id, releaseWakeLock]);
 
   // Process queued ICE candidates once remote description is set
   const drainQueuedCandidates = useCallback(async (pc: RTCPeerConnection) => {
@@ -817,6 +1006,9 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       audioElementRef.current.play().catch(() => {});
     }
 
+    // Ensure screen wake lock is active to keep display & microphone alive
+    requestWakeLock();
+
     // Start recorder if personal or admin recording enabled
     if (!recorderRef.current) {
       recorderRef.current = new CallAudioRecorder();
@@ -824,7 +1016,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
     if (isPersonalRecording || isAdminRecordingActive) {
       recorderRef.current.start(localStreamRef.current, remoteStreamRef.current);
     }
-  }, [isPersonalRecording, isAdminRecordingActive]);
+  }, [isPersonalRecording, isAdminRecordingActive, requestWakeLock]);
 
   // Stop recording and upload
   const finishAndUploadRecording = useCallback(
@@ -1470,6 +1662,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         });
         localStream.getAudioTracks().forEach((track) => {
           track.enabled = true;
+          attachLocalTrackListeners(track);
         });
         localStreamRef.current = localStream;
         setIsMuted(false);
@@ -1637,6 +1830,7 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
       });
       localStream.getAudioTracks().forEach((track) => {
         track.enabled = true;
+        attachLocalTrackListeners(track);
       });
       localStreamRef.current = localStream;
       setIsMuted(false);
@@ -2034,8 +2228,28 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
         callState === 'connecting' ||
         callState === 'connected') &&
         !isCallMinimized && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200">
-            <div className="relative w-full max-w-sm bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 text-white rounded-3xl p-6 shadow-2xl border border-slate-800 text-center flex flex-col items-center animate-in zoom-in-95 duration-200">
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/85 backdrop-blur-md animate-in fade-in duration-200 cursor-pointer"
+            onPointerDown={(e) => {
+              backdropPointerDownRef.current = e.target === e.currentTarget;
+            }}
+            onClick={(e) => {
+              if (e.target === e.currentTarget && backdropPointerDownRef.current) {
+                e.preventDefault();
+                setIsCallMinimized(true);
+              }
+              backdropPointerDownRef.current = false;
+            }}
+          >
+            <div
+              className="relative w-full max-w-sm bg-gradient-to-b from-slate-900 via-slate-900 to-slate-950 text-white rounded-3xl p-6 shadow-2xl border border-slate-800 text-center flex flex-col items-center animate-in zoom-in-95 duration-200 cursor-default"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+              onClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
               {/* Minimize Call Button (Issue 3) */}
               <button
                 type="button"
@@ -2188,12 +2402,12 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                       ? 'bg-teal-600 text-white shadow-md'
                       : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
                   } ${(callState !== 'connected' && callState !== 'connecting') ? 'opacity-40 cursor-not-allowed' : ''}`}
-                  title={isSpeaker ? 'स्पीकर बंद करें (Speaker Off)' : 'स्पीकर चालू करें (Speaker On)'}
+                  title={isSpeaker ? 'लाउडस्पीकर चालू (इयरपीस पर बदलें)' : 'इयरपीस मोड चालू (लाउडस्पीकर पर बदलें)'}
                 >
                   {isSpeaker ? (
                     <Volume2 className="w-5 h-5" />
                   ) : (
-                    <VolumeX className="w-5 h-5" />
+                    <Volume1 className="w-5 h-5" />
                   )}
                 </button>
 
@@ -2300,9 +2514,9 @@ export const CallingProvider: React.FC<{ children: ReactNode }> = ({ children })
                 className={`p-2 rounded-full transition cursor-pointer ${
                   isSpeaker ? 'bg-teal-600 text-white' : 'bg-slate-800 hover:bg-slate-700 text-slate-200'
                 } ${(callState !== 'connected' && callState !== 'connecting') ? 'opacity-40 cursor-not-allowed' : ''}`}
-                title={isSpeaker ? 'स्पीकर बंद करें' : 'स्पीकर चालू करें'}
+                title={isSpeaker ? 'लाउडस्पीकर चालू' : 'इयरपीस मोड चालू'}
               >
-                {isSpeaker ? <Volume2 className="w-4 h-4" /> : <VolumeX className="w-4 h-4" />}
+                {isSpeaker ? <Volume2 className="w-4 h-4" /> : <Volume1 className="w-4 h-4" />}
               </button>
 
               {/* Red End Call */}

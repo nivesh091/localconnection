@@ -46,9 +46,9 @@ export class NotificationService {
   }
 
   /**
-   * Request notification permission with user consent
+   * Request notification permission with user consent and register subscription
    */
-  static async requestPermission(): Promise<NotificationPermission> {
+  static async requestPermission(userId?: string): Promise<NotificationPermission> {
     if (!this.isSupported()) {
       return 'denied';
     }
@@ -57,7 +57,7 @@ export class NotificationService {
       const permission = await Notification.requestPermission();
       if (permission === 'granted') {
         safeStorage.removeItem('kaammitra_notification_dismissed');
-        await this.registerPushSubscription();
+        await this.registerPushSubscription(userId);
       } else if (permission === 'denied') {
         this.dismissPrompt();
       }
@@ -81,34 +81,69 @@ export class NotificationService {
         return null;
       }
 
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        // Optional VAPID key from environment
-        const vapidPublicKey =
-          (import.meta as any).env?.VITE_VAPID_PUBLIC_KEY ||
-          'BIj-hKqgD1VNvcGsg_3Z5zzyBE57jQoTfJ6EDMGZ6k9n99d1EUxKO9G6k_HxCyrUFi9kXXP_raZu9Qyv2y2M0o0';
-        const options: PushSubscriptionOptionsInit = {
-          userVisibleOnly: true,
-        };
-
-        if (vapidPublicKey) {
-          options.applicationServerKey = this.urlBase64ToUint8Array(vapidPublicKey) as unknown as BufferSource;
+      // Resolve userId if not explicitly provided
+      let resolvedUserId = userId;
+      if (!resolvedUserId && typeof window !== 'undefined') {
+        const storedId = safeStorage.getItem('km_active_user_id');
+        if (storedId) {
+          resolvedUserId = storedId;
+        } else {
+          try {
+            const { data: sessData } = await supabase.auth.getSession();
+            if (sessData?.session?.user?.id) {
+              resolvedUserId = sessData.session.user.id;
+            }
+          } catch {}
         }
-
-        sub = await reg.pushManager.subscribe(options);
       }
 
-      if (sub && userId) {
+      let vapidPublicKey = (import.meta as any).env?.VITE_VAPID_PUBLIC_KEY;
+      if (!vapidPublicKey) {
+        try {
+          const keyResp = await fetch('/api/push/vapid-public-key');
+          if (keyResp.ok) {
+            const keyJson = await keyResp.json();
+            if (keyJson?.publicKey) vapidPublicKey = keyJson.publicKey;
+          }
+        } catch {}
+      }
+      if (!vapidPublicKey) {
+        vapidPublicKey =
+          'BIj-hKqgD1VNvcGsg_3Z5zzyBE57jQoTfJ6EDMGZ6k9n99d1EUxKO9G6k_HxCyrUFi9kXXP_raZu9Qyv2y2M0o0';
+      }
+
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        const options: PushSubscriptionOptionsInit = {
+          userVisibleOnly: true,
+          applicationServerKey: this.urlBase64ToUint8Array(vapidPublicKey) as unknown as BufferSource,
+        };
+
+        try {
+          sub = await reg.pushManager.subscribe(options);
+        } catch (subErr) {
+          console.warn('[NotificationService] Initial subscribe failed, attempting clean renewal:', subErr);
+          try {
+            const oldSub = await reg.pushManager.getSubscription();
+            if (oldSub) await oldSub.unsubscribe().catch(() => {});
+            sub = await reg.pushManager.subscribe(options);
+          } catch (retryErr) {
+            console.warn('[NotificationService] PushManager re-subscription notice:', retryErr);
+          }
+        }
+      }
+
+      if (sub && resolvedUserId) {
         const subJson = sub.toJSON();
         const p256dh = subJson.keys?.p256dh;
         const auth = subJson.keys?.auth;
 
-        // 1. Sync to local server
+        // 1. Sync to local server (populates in-memory push map immediately)
         fetch('/api/push/subscribe', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            userId,
+            userId: resolvedUserId,
             subscription: subJson,
             userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : '',
           }),
@@ -119,7 +154,7 @@ export class NotificationService {
           try {
             await supabase.from('push_subscriptions').upsert(
               {
-                user_id: userId,
+                user_id: resolvedUserId,
                 endpoint: sub.endpoint,
                 p256dh,
                 auth,

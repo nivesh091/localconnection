@@ -13,26 +13,38 @@ window.addEventListener('unhandledrejection', (event) => {
   event.preventDefault();
 });
 
-// Register PWA Service Worker for offline worker profiles & push notifications in production builds
-if (typeof window !== 'undefined' && 'serviceWorker' in navigator && import.meta.env.PROD) {
-  registerSW({
-    immediate: true,
-    onNeedReload() {
-      console.log('[SW] New version activated in background without interrupting user.');
-    },
-    onNeedRefresh() {
-      console.log('[SW] New version ready.');
-    },
-    onOfflineReady() {
-      console.log('[SW] App ready for offline use. Worker profiles and search results cached.');
-    },
-    onRegistered(registration) {
-      console.log('[SW] Service worker registered successfully:', registration?.scope);
-    },
-    onRegisterError(error) {
-      console.warn('[SW] Service worker registration error:', error);
-    },
-  });
+// Register PWA Service Worker for offline worker profiles & push notifications
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  if (import.meta.env.PROD) {
+    registerSW({
+      immediate: true,
+      onNeedReload() {
+        console.log('[SW] New version activated in background without interrupting user.');
+      },
+      onNeedRefresh() {
+        console.log('[SW] New version ready.');
+      },
+      onOfflineReady() {
+        console.log('[SW] App ready for offline use. Worker profiles and search results cached.');
+      },
+      onRegistered(registration) {
+        console.log('[SW] Service worker registered successfully:', registration?.scope);
+      },
+      onRegisterError(error) {
+        console.warn('[SW] Service worker registration error:', error);
+      },
+    });
+  } else {
+    // In dev environment, register the push service worker directly to enable push notifications testing
+    navigator.serviceWorker
+      .register('/sw-push.js')
+      .then((reg) => {
+        console.log('[SW-Dev] Development push service worker registered:', reg.scope);
+      })
+      .catch((err) => {
+        console.warn('[SW-Dev] Dev push service worker registration note:', err);
+      });
+  }
 }
 
 createRoot(document.getElementById('root')!).render(

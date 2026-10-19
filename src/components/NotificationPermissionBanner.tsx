@@ -34,7 +34,7 @@ export const NotificationPermissionBanner: React.FC = () => {
 
   const handleEnable = async () => {
     setIsEnabling(true);
-    const perm = await NotificationService.requestPermission();
+    const perm = await NotificationService.requestPermission(user?.id);
     setIsEnabling(false);
     setIsVisible(false);
     if (perm === 'granted') {
