@@ -18,6 +18,7 @@ import { UserNotificationService } from '../services/userNotificationService';
 import { WorkerService } from '../services/workerService';
 import { useTranslation } from '../hooks/useTranslation';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
+import { formatAppTimestamp } from '../lib/dateTime';
 import verificationLogo from '@/verificationlogo.png';
 
 interface NotificationListModalProps {
@@ -125,26 +126,7 @@ export const NotificationListModal: React.FC<NotificationListModalProps> = ({
   };
 
   const formatDate = (iso: string) => {
-    try {
-      const d = new Date(iso);
-      const today = new Date();
-      const isToday =
-        d.getDate() === today.getDate() &&
-        d.getMonth() === today.getMonth() &&
-        d.getFullYear() === today.getFullYear();
-
-      const timeStr = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-      if (isToday) {
-        return lang === 'hi' ? `आज, ${timeStr}` : `Today, ${timeStr}`;
-      }
-      const dateStr = d.toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-US', {
-        day: 'numeric',
-        month: 'short',
-      });
-      return `${dateStr}, ${timeStr}`;
-    } catch {
-      return '';
-    }
+    return formatAppTimestamp(iso, { lang: lang as 'hi' | 'en' });
   };
 
   const unreadCount = notifications.filter((n) => !n.is_read).length;

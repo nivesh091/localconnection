@@ -71,6 +71,7 @@ import { AuthService } from '../services/authService';
 import { MediaService } from '../services/mediaService';
 import { LocationService } from '../services/locationService';
 import { isSchemaPending } from '../lib/supabase';
+import { formatAppTimestamp } from '../lib/dateTime';
 import {
   KAAMMITRA_MASTER_SCHEMA_SQL,
   ACCOUNT_DELETION_MIGRATION_SQL,
@@ -2333,7 +2334,7 @@ export const AdminPage: React.FC = () => {
                         <td className="p-3 font-mono text-slate-700">{u.mobile}</td>
                         <td className="p-3 text-slate-500 truncate max-w-[140px]">{u.address || '—'}</td>
                         <td className="p-3 text-slate-400">
-                          {new Date(u.created_at).toLocaleDateString()}
+                          {formatAppTimestamp(u.created_at)}
                         </td>
                         <td className="p-3 text-right">
                           <div className="inline-flex items-center justify-end gap-1.5 flex-wrap">
@@ -2387,7 +2388,7 @@ export const AdminPage: React.FC = () => {
                                 </div>
                                 <div>
                                   <span className="font-semibold text-slate-900">पंजीकरण तिथि: </span>
-                                  <span>{new Date(u.created_at).toLocaleString()}</span>
+                                  <span>{formatAppTimestamp(u.created_at)}</span>
                                 </div>
                                 <div className="sm:col-span-2">
                                   <span className="font-semibold text-slate-900">पता / स्थान: </span>
@@ -3243,7 +3244,7 @@ export const AdminPage: React.FC = () => {
                           {c.send_to_all ? 'सभी उपयोगकर्ताओं को' : 'विशिष्ट उपयोगकर्ता'}
                         </span>
                         <span className="text-[10px] text-slate-400">
-                          {new Date(c.created_at).toLocaleString()}
+                          {formatAppTimestamp(c.created_at)}
                         </span>
                       </div>
                       {c.message_text && <p className="text-slate-700 leading-relaxed">{c.message_text}</p>}
@@ -3344,7 +3345,7 @@ export const AdminPage: React.FC = () => {
                       )}
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/60">
                         <span className="text-[10px] text-slate-400">
-                          {new Date(hr.created_at).toLocaleString()}
+                          {formatAppTimestamp(hr.created_at)}
                         </span>
                         <button
                           type="button"
@@ -3446,7 +3447,7 @@ export const AdminPage: React.FC = () => {
                       )}
                       <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/60">
                         <span className="text-[10px] text-slate-400">
-                          {new Date(wr.created_at).toLocaleString()}
+                          {formatAppTimestamp(wr.created_at)}
                         </span>
                         <button
                           type="button"
@@ -3886,10 +3887,7 @@ export const AdminPage: React.FC = () => {
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
                           <span className="text-[11px] text-slate-400">
-                            {new Date(report.created_at).toLocaleString('hi-IN', {
-                              dateStyle: 'medium',
-                              timeStyle: 'short',
-                            })}
+                            {formatAppTimestamp(report.created_at)}
                           </span>
                           {/* Quick Delete Report Icon */}
                           <button
@@ -4144,11 +4142,7 @@ export const AdminPage: React.FC = () => {
                   const locStr = [req.place, req.district, req.state].filter(Boolean).join(', ');
                   const hasVoice = Boolean(req.voice_storage_path);
                   const photoCount = Array.isArray(req.photo_storage_paths) ? req.photo_storage_paths.length : 0;
-                  const createdDate = new Date(req.created_at).toLocaleDateString('hi-IN', {
-                    day: 'numeric',
-                    month: 'short',
-                    year: 'numeric',
-                  });
+                  const createdDate = formatAppTimestamp(req.created_at);
 
                   return (
                     <div

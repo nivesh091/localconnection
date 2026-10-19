@@ -24,6 +24,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
+import { formatAppTimestamp } from '../lib/dateTime';
 import verificationLogo from '@/verificationlogo.png';
 
 interface MessagesPageProps {
@@ -389,8 +390,7 @@ export const MessagesPage: React.FC<MessagesPageProps> = ({
 
   const formatTime = (isoString?: string) => {
     if (!isoString) return '';
-    const date = new Date(isoString);
-    return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    return formatAppTimestamp(isoString, { lang: lang as 'hi' | 'en' });
   };
 
   // All conversations (including Admin) sorted by most recent activity timestamp (latest message or call event)

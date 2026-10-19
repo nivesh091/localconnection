@@ -3,6 +3,7 @@ import { PhoneMissed, Phone, MessageSquare, X, CheckCircle, Clock } from 'lucide
 import { CallRecord } from '../types/calling';
 import { UserProfile } from '../types';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
+import { formatAppTimestamp } from '../lib/dateTime';
 
 interface MissedCallsModalProps {
   missedCalls: CallRecord[];
@@ -13,53 +14,14 @@ interface MissedCallsModalProps {
 }
 
 /**
- * Format timestamp in friendly localized Hindi
+ * Format timestamp following standard rules:
+ * - Today's events: Today, 10:00 AM
+ * - Yesterday's events: Yesterday, 10:00 AM
+ * - Older events: 19 Oct 2026, 10:00 AM
  */
 function formatCallTime(dateString?: string): string {
   if (!dateString) return '';
-  const date = new Date(dateString);
-  if (isNaN(date.getTime())) return '';
-
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60000);
-
-  const timeStr = date.toLocaleTimeString('en-US', {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-  }).toLowerCase();
-
-  const isToday =
-    date.getDate() === now.getDate() &&
-    date.getMonth() === now.getMonth() &&
-    date.getFullYear() === now.getFullYear();
-
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  const isYesterday =
-    date.getDate() === yesterday.getDate() &&
-    date.getMonth() === yesterday.getMonth() &&
-    date.getFullYear() === yesterday.getFullYear();
-
-  if (diffMins < 1) {
-    return 'अभी-अभी';
-  }
-  if (diffMins < 60) {
-    return `${diffMins} मिनट पहले`;
-  }
-  if (isToday) {
-    return `आज, ${timeStr}`;
-  }
-  if (isYesterday) {
-    return `कल, ${timeStr}`;
-  }
-
-  const dateStr = date.toLocaleDateString('hi-IN', {
-    day: 'numeric',
-    month: 'short',
-  });
-  return `${dateStr}, ${timeStr}`;
+  return formatAppTimestamp(dateString);
 }
 
 export const MissedCallsModal: React.FC<MissedCallsModalProps> = ({
@@ -71,11 +33,24 @@ export const MissedCallsModal: React.FC<MissedCallsModalProps> = ({
 }) => {
   usePopupBackDismiss(isOpen, onClose);
 
-  if (!isOpen || !missedCalls || missedCalls.length === 0) {
+  // Ensure only unique missed calls are counted and displayed (one per unique caller, latest call preserved)
+  const uniqueMissedCalls = React.useMemo(() => {
+    if (!missedCalls || missedCalls.length === 0) return [];
+    const callerMap = new Map<string, CallRecord>();
+    for (const call of missedCalls) {
+      const key = call.caller_id || call.caller?.id || call.caller?.mobile || call.id;
+      if (!callerMap.has(key)) {
+        callerMap.set(key, call);
+      }
+    }
+    return Array.from(callerMap.values());
+  }, [missedCalls]);
+
+  if (!isOpen || uniqueMissedCalls.length === 0) {
     return null;
   }
 
-  const count = missedCalls.length;
+  const count = uniqueMissedCalls.length;
 
   return (
     <div
@@ -122,7 +97,7 @@ export const MissedCallsModal: React.FC<MissedCallsModalProps> = ({
 
         {/* Scrollable list of missed calls */}
         <div className="p-4 overflow-y-auto space-y-2.5 max-h-[50vh] divide-y divide-slate-100/80">
-          {missedCalls.map((call) => {
+          {uniqueMissedCalls.map((call) => {
             const callerProfile = call.caller as UserProfile | undefined;
             const callerName =
               callerProfile?.name?.trim() ||

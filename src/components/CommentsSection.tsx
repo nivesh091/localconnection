@@ -21,6 +21,7 @@ import { CompactAudioPlayer } from './CompactAudioPlayer';
 import { ReportCommentModal } from './ReportCommentModal';
 import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
+import { formatAppTimestamp } from '../lib/dateTime';
 import verificationLogo from '@/verificationlogo.png';
 
 export interface CommentsSectionProps {
@@ -344,17 +345,7 @@ export const CommentsSection: React.FC<CommentsSectionProps> = ({
 
   // Helper format time
   const formatTime = (isoString: string) => {
-    try {
-      const date = new Date(isoString);
-      return date.toLocaleDateString(lang === 'hi' ? 'hi-IN' : 'en-US', {
-        day: 'numeric',
-        month: 'short',
-        hour: '2-digit',
-        minute: '2-digit',
-      });
-    } catch {
-      return '';
-    }
+    return formatAppTimestamp(isoString, { lang: lang as 'hi' | 'en' });
   };
 
   // Render individual comment item (used for both parent comments and child replies)

@@ -47,6 +47,7 @@ import { useAuth } from '../context/AuthContext';
 import { useTranslation } from '../hooks/useTranslation';
 import { useWebsiteBranding } from '../hooks/useWebsiteBranding';
 import { useCallingSettings } from '../hooks/useCallingSettings';
+import { formatAppTimestamp, formatChatDateHeader, formatLocalTime } from '../lib/dateTime';
 import verificationLogo from '@/verificationlogo.png';
 import { usePopupBackDismiss } from '../hooks/usePopupBackDismiss';
 import { supabase } from '../lib/supabase';
@@ -1905,7 +1906,23 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                 </p>
               </div>
             ) : (
-              timelineItems.map((item) => {
+              timelineItems.map((item, index) => {
+                const itemDate = new Date(item.timestamp);
+                const prevItemDate = index > 0 ? new Date(timelineItems[index - 1].timestamp) : null;
+                const showDateSeparator =
+                  !prevItemDate ||
+                  itemDate.getFullYear() !== prevItemDate.getFullYear() ||
+                  itemDate.getMonth() !== prevItemDate.getMonth() ||
+                  itemDate.getDate() !== prevItemDate.getDate();
+
+                const dateSeparatorEl = showDateSeparator ? (
+                  <div key={`date-sep-${item.timestamp}-${index}`} className="flex justify-center my-2.5 pointer-events-none select-none">
+                    <span className="bg-slate-200/90 text-slate-700 text-[11px] font-semibold px-3 py-1 rounded-full shadow-2xs">
+                      {formatChatDateHeader(item.timestamp, { lang })}
+                    </span>
+                  </div>
+                ) : null;
+
                 if (item.type === 'call') {
                   const call = item.data;
                   const isOutgoing = call.caller_id === user?.id;
@@ -1922,9 +1939,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                   const isSelectedForAction = actionCall?.id === call.id;
 
                   return (
-                    <div
-                      key={`call-${call.id}`}
-                      id={`call-${call.id}`}
+                    <React.Fragment key={`call-frag-${call.id}`}>
+                      {dateSeparatorEl}
+                      <div
+                        id={`call-${call.id}`}
                       onMouseDown={(e) => {
                         if (e.button === 0) startCallHoldTimer(call, e);
                       }}
@@ -2000,12 +2018,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                                 ? 'आउटगोइंग इंटरनेट कॉल'
                                 : 'इनकमिंग इंटरनेट कॉल'}
                             </p>
-                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5">
+                            <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5" title={formatAppTimestamp(call.started_at || call.created_at, { lang })}>
                               <span>
-                                {new Date(call.started_at || call.created_at).toLocaleTimeString('hi-IN', {
-                                  hour: '2-digit',
-                                  minute: '2-digit',
-                                })}
+                                {formatLocalTime(new Date(call.started_at || call.created_at))}
                               </span>
                               {call.duration_seconds > 0 && (
                                 <>
@@ -2045,8 +2060,9 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                         )}
                       </div>
                     </div>
-                  );
-                }
+                  </React.Fragment>
+                );
+              }
 
                 const msg = item.data;
             const isMine = msg.is_mine;
@@ -2056,9 +2072,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({
             const isSearchMatch = isSearchOpen && matchingMessageIds.includes(msg.id);
 
             return (
-              <div
-                key={msg.id}
-                id={`msg-${msg.id}`}
+              <React.Fragment key={`msg-frag-${msg.id}`}>
+                {dateSeparatorEl}
+                <div
+                  id={`msg-${msg.id}`}
                 onMouseDown={(e) => {
                   if (e.button === 0) startHoldTimer(msg, e);
                 }}
@@ -2234,12 +2251,10 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                     className={`flex items-center justify-end gap-1 mt-1 text-[10px] ${
                       isMine ? 'text-emerald-800/80 font-medium' : 'text-slate-500'
                     }`}
+                    title={formatAppTimestamp(msg.created_at, { lang })}
                   >
                     <span>
-                      {new Date(msg.created_at).toLocaleTimeString([], {
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
+                      {formatLocalTime(new Date(msg.created_at))}
                     </span>
                     {isMine && !isDeleted && (
                       <span>
@@ -2266,7 +2281,8 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                   </div>
                 </div>
               </div>
-            );
+            </React.Fragment>
+          );
           })
         )}
           </>
@@ -2406,10 +2422,7 @@ export const ChatPage: React.FC<ChatPageProps> = ({
                     ? 'आउटगोइंग कॉल'
                     : 'इनकमिंग कॉल'}
                   {' • '}
-                  {new Date(actionCall.started_at || actionCall.created_at).toLocaleTimeString('hi-IN', {
-                    hour: '2-digit',
-                    minute: '2-digit',
-                  })}
+                  {formatAppTimestamp(actionCall.started_at || actionCall.created_at, { lang })}
                   {actionCall.duration_seconds > 0 && ` (${Math.floor(actionCall.duration_seconds / 60)}m ${actionCall.duration_seconds % 60}s)`}
                 </span>
               </div>

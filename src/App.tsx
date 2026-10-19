@@ -181,6 +181,7 @@ function AppContent() {
   const { startCall, callState } = useCalling();
   const [unseenMissedCalls, setUnseenMissedCalls] = useState<CallRecord[]>([]);
   const [isMissedCallModalOpen, setIsMissedCallModalOpen] = useState<boolean>(false);
+  const allUnseenCallIdsRef = useRef<string[]>([]);
 
   // Check for unseen missed calls on startup and when returning to the app
   const checkMissedCalls = useCallback(async () => {
@@ -188,9 +189,23 @@ function AppContent() {
     try {
       const calls = await CallingService.getUnacknowledgedMissedCalls(user.id);
       if (calls && calls.length > 0) {
-        setUnseenMissedCalls(calls);
-        setIsMissedCallModalOpen(true);
+        // Track all unacknowledged call IDs so they are all acknowledged upon dismissal
+        allUnseenCallIdsRef.current = calls.map((c) => c.id);
+
+        // Filter to only unique missed calls (one per unique caller, latest call preserved)
+        const uniqueCallsByCaller = new Map<string, CallRecord>();
+        for (const call of calls) {
+          const callerKey = call.caller_id || call.caller?.id || call.caller?.mobile || call.id;
+          if (!uniqueCallsByCaller.has(callerKey)) {
+            uniqueCallsByCaller.set(callerKey, call);
+          }
+        }
+        const uniqueCalls = Array.from(uniqueCallsByCaller.values());
+
+        setUnseenMissedCalls(uniqueCalls);
+        setIsMissedCallModalOpen(uniqueCalls.length > 0);
       } else {
+        allUnseenCallIdsRef.current = [];
         setUnseenMissedCalls([]);
         setIsMissedCallModalOpen(false);
       }
@@ -201,6 +216,7 @@ function AppContent() {
 
   useEffect(() => {
     if (!user?.id) {
+      allUnseenCallIdsRef.current = [];
       setUnseenMissedCalls([]);
       setIsMissedCallModalOpen(false);
       return;
@@ -522,12 +538,16 @@ function AppContent() {
 
   // Acknowledge and close missed calls popup
   const handleCloseMissedCalls = () => {
-    if (user?.id && unseenMissedCalls.length > 0) {
+    if (user?.id && (allUnseenCallIdsRef.current.length > 0 || unseenMissedCalls.length > 0)) {
+      const idsToAcknowledge = Array.from(
+        new Set([...allUnseenCallIdsRef.current, ...unseenMissedCalls.map((c) => c.id)])
+      );
       CallingService.acknowledgeMissedCalls(
         user.id,
-        unseenMissedCalls.map((c) => c.id)
+        idsToAcknowledge
       );
     }
+    allUnseenCallIdsRef.current = [];
     setIsMissedCallModalOpen(false);
     setUnseenMissedCalls([]);
   };

@@ -16,11 +16,13 @@ import {
   HelpCircle,
   Save,
   Check,
+  X,
 } from 'lucide-react';
 import { CallingService } from '../services/callingService';
 import { CallRecording } from '../types/calling';
 import { RecordingGuidelinesModal } from './RecordingGuidelinesModal';
 import { AdminService } from '../services/adminService';
+import { formatAppTimestamp } from '../lib/dateTime';
 
 export const AdminCallRecordingsSection: React.FC = () => {
   const [recordings, setRecordings] = useState<CallRecording[]>([]);
@@ -41,6 +43,9 @@ export const AdminCallRecordingsSection: React.FC = () => {
 
   // Deletion state
   const [deletingCallId, setDeletingCallId] = useState<string | null>(null);
+  const [isDeletingAll, setIsDeletingAll] = useState<boolean>(false);
+  const [confirmDeleteAllOpen, setConfirmDeleteAllOpen] = useState<boolean>(false);
+  const [confirmSingleDeleteCallId, setConfirmSingleDeleteCallId] = useState<string | null>(null);
   const [actionNotice, setActionNotice] = useState<string | null>(null);
   const [showGuidelines, setShowGuidelines] = useState<boolean>(false);
 
@@ -158,23 +163,48 @@ export const AdminCallRecordingsSection: React.FC = () => {
   };
 
   // Permanent Delete Call Recordings (Requirement 10)
-  const handlePermanentDelete = async (callId: string) => {
-    const confirmed = window.confirm(
-      'सावधानी: क्या आप इस कॉल की सभी प्रशासनिक और व्यक्तिगत रिकॉर्डिंग्स को स्थायी रूप से हटाना चाहते हैं? यह क्रिया वापस नहीं ली जा सकती।'
-    );
-    if (!confirmed) return;
-
+  const handleExecutePermanentDelete = async (callId: string) => {
+    setConfirmSingleDeleteCallId(null);
     setDeletingCallId(callId);
-    const res = await CallingService.adminPermanentDeleteCallRecordings(callId);
-    setDeletingCallId(null);
+    try {
+      const res = await CallingService.adminPermanentDeleteCallRecordings(callId);
+      if (res.success) {
+        setRecordings((prev) => prev.filter((r) => r.call_id !== callId));
+        setActionNotice('इस कॉल की सभी रिकॉर्डिंग्स स्टोरेज व डेटाबेस से स्थायी रूप से हटा दी गईं।');
+      } else {
+        setActionNotice(res.error || 'हटाने में विफलता आई।');
+      }
+    } catch (err: any) {
+      setActionNotice(err?.message || 'हटाने में त्रुटि आई।');
+    } finally {
+      setDeletingCallId(null);
+      setTimeout(() => setActionNotice(null), 3500);
+      await loadRecordings();
+    }
+  };
 
-    if (res.success) {
-      setRecordings((prev) => prev.filter((r) => r.call_id !== callId));
-      setActionNotice('इस कॉल की सभी रिकॉर्डिंग्स स्थायी रूप से हटा दी गईं।');
-      setTimeout(() => setActionNotice(null), 3500);
-    } else {
-      setActionNotice(res.error || 'हटाने में विफलता आई।');
-      setTimeout(() => setActionNotice(null), 3500);
+  // Bulk Permanent Delete All Recordings (Task 1A)
+  const handleExecuteDeleteAllRecordings = async () => {
+    setConfirmDeleteAllOpen(false);
+    if (recordings.length === 0) return;
+
+    setIsDeletingAll(true);
+    setActionNotice(null);
+
+    try {
+      const res = await CallingService.adminDeleteAllRecordings(filterType);
+      if (res.success) {
+        setActionNotice(`सफलता: कुल ${res.deletedCount} कॉल रिकॉर्डिंग्स डेटाबेस और स्टोरेज से स्थायी रूप से हटा दी गईं।`);
+      } else {
+        setActionNotice(res.error || 'रिकॉर्डिंग्स हटाने में आंशिक या पूर्ण त्रुटि आई।');
+      }
+      await loadRecordings();
+    } catch (err: any) {
+      setActionNotice(err?.message || 'सभी रिकॉर्डिंग्स हटाने में त्रुटि आई।');
+      await loadRecordings();
+    } finally {
+      setIsDeletingAll(false);
+      setTimeout(() => setActionNotice(null), 5000);
     }
   };
 
@@ -260,7 +290,23 @@ export const AdminCallRecordingsSection: React.FC = () => {
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {/* Delete All Recordings button (Task 1A) */}
+            <button
+              type="button"
+              disabled={isDeletingAll || isLoading || recordings.length === 0}
+              onClick={() => setConfirmDeleteAllOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-rose-50 hover:bg-rose-100 disabled:opacity-50 disabled:cursor-not-allowed text-rose-700 border border-rose-300 text-xs font-bold transition cursor-pointer"
+              title="सभी रिकॉर्डिंग्स स्थायी रूप से हटाएं"
+            >
+              {isDeletingAll ? (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-rose-600" />
+              ) : (
+                <Trash2 className="w-3.5 h-3.5 text-rose-600" />
+              )}
+              <span>सभी रिकॉर्डिंग्स हटाएं (Delete All Recordings)</span>
+            </button>
+
             <button
               type="button"
               onClick={() => setShowGuidelines(true)}
@@ -377,15 +423,7 @@ export const AdminCallRecordingsSection: React.FC = () => {
               const progress = playProgress[rec.id] || 0;
               const isAdminEvidence = rec.recording_type === 'admin_evidence';
 
-              const dateStr = new Date(rec.created_at).toLocaleDateString('hi-IN', {
-                day: 'numeric',
-                month: 'short',
-                year: 'numeric',
-              });
-              const timeStr = new Date(rec.created_at).toLocaleTimeString('hi-IN', {
-                hour: '2-digit',
-                minute: '2-digit',
-              });
+              const formattedTimestamp = formatAppTimestamp(rec.created_at);
 
               return (
                 <div
@@ -424,7 +462,7 @@ export const AdminCallRecordingsSection: React.FC = () => {
                         <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-500 mt-0.5">
                           <span className="flex items-center gap-1">
                             <Clock className="w-3 h-3 text-slate-400" />
-                            <span>{dateStr}, {timeStr}</span>
+                            <span>{formattedTimestamp}</span>
                           </span>
                           <span>•</span>
                           <span>अवधि: <b>{formatSeconds(rec.duration_seconds || rec.call?.duration_seconds || 0)}</b></span>
@@ -460,7 +498,7 @@ export const AdminCallRecordingsSection: React.FC = () => {
 
                       {/* Expiry Date */}
                       <span className="text-[10px] text-slate-400 bg-white px-2 py-1 rounded-xl border border-slate-200" title={`Expiry: ${rec.expires_at}`}>
-                        हटाने की तारीख: {new Date(rec.expires_at).toLocaleDateString('hi-IN', { day: 'numeric', month: 'short' })}
+                        हटाने की तारीख: {formatAppTimestamp(rec.expires_at, { includeTime: false })}
                       </span>
                     </div>
                   </div>
@@ -494,7 +532,7 @@ export const AdminCallRecordingsSection: React.FC = () => {
                     <button
                       type="button"
                       disabled={deletingCallId === rec.call_id}
-                      onClick={() => handlePermanentDelete(rec.call_id)}
+                      onClick={() => setConfirmSingleDeleteCallId(rec.call_id)}
                       className="inline-flex items-center gap-1 px-3 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold transition cursor-pointer"
                       title="इस कॉल की सभी साक्ष्य व व्यक्तिगत रिकॉर्डिंग्स को सर्वर व स्टोरेज से स्थायी रूप से हटाएं"
                     >
@@ -508,6 +546,128 @@ export const AdminCallRecordingsSection: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Confirmation Modal: Delete All Recordings (Task 1A) */}
+      {confirmDeleteAllOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-base font-bold text-slate-900 leading-snug">
+                  सभी कॉल रिकॉर्डिंग्स स्थायी रूप से हटाएं?
+                </h4>
+                <p className="text-xs text-rose-700 font-semibold mt-0.5">
+                  Permanent & Irreversible Deletion
+                </p>
+              </div>
+            </div>
+
+            <div className="bg-rose-50/70 border border-rose-100 rounded-2xl p-4 text-xs text-slate-700 space-y-2">
+              <p className="font-semibold text-rose-900">
+                सावधानी: यह क्रिया पूरी तरह अपरिवर्तनीय है।
+              </p>
+              <ul className="list-disc pl-4 space-y-1 text-slate-600">
+                <li>
+                  वर्तमान में फ़िल्टर की गई कुल <strong>{recordings.length}</strong> कॉल रिकॉर्डिंग्स हटाई जाएंगी।
+                </li>
+                <li>
+                  सभी वास्तविक ऑडियो फाइल्स स्टोरेज (<strong>call-recordings</strong> बकेट) से हमेशा के लिए नष्ट हो जाएंगी।
+                </li>
+                <li>डेटाबेस से सभी संबंधित रिकॉर्ड्स स्थायी रूप से मिटा दिए जाएंगे।</li>
+                <li>
+                  रद्द (Cancel) करने पर कोई भी फ़ाइल या डेटाबेस रिकॉर्ड नहीं हटाया जाएगा।
+                </li>
+              </ul>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={isDeletingAll}
+                onClick={() => setConfirmDeleteAllOpen(false)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                disabled={isDeletingAll}
+                onClick={handleExecuteDeleteAllRecordings}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 active:scale-98 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingAll ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>हटाया जा रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>हाँ, सभी रिकॉर्डिंग्स हटाएं (Delete All)</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation Modal: Single Call Permanent Delete */}
+      {confirmSingleDeleteCallId && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
+          <div className="w-full max-w-md bg-white rounded-3xl p-6 shadow-2xl space-y-4 animate-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-3">
+              <div className="w-12 h-12 rounded-2xl bg-rose-100 border border-rose-200 text-rose-600 flex items-center justify-center shrink-0">
+                <AlertTriangle className="w-6 h-6" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="text-base font-bold text-slate-900 leading-snug">
+                  कॉल रिकॉर्डिंग स्थायी रूप से हटाएं?
+                </h4>
+                <p className="text-xs text-rose-700 font-semibold mt-0.5">
+                  Permanent Delete of All Copies
+                </p>
+              </div>
+            </div>
+
+            <p className="text-xs text-slate-600 leading-relaxed">
+              क्या आप इस कॉल की सभी प्रशासनिक साक्ष्य व व्यक्तिगत रिकॉर्डिंग्स को स्टोरेज और डेटाबेस से हमेशा के लिए नष्ट करना चाहते हैं? यह क्रिया वापस नहीं ली जा सकती।
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={deletingCallId !== null}
+                onClick={() => setConfirmSingleDeleteCallId(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+              >
+                रद्द करें (Cancel)
+              </button>
+              <button
+                type="button"
+                disabled={deletingCallId !== null}
+                onClick={() => handleExecutePermanentDelete(confirmSingleDeleteCallId)}
+                className="px-4 py-2 bg-rose-600 hover:bg-rose-700 active:scale-98 text-white text-xs font-bold rounded-xl shadow-xs transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+              >
+                {deletingCallId === confirmSingleDeleteCallId ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                    <span>हटाया जा रहा है...</span>
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-3.5 h-3.5" />
+                    <span>हाँ, स्थायी रूप से हटाएं</span>
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Recording Guidelines Modal */}
       <RecordingGuidelinesModal

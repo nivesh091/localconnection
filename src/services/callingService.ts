@@ -1,4 +1,4 @@
-import { supabase } from '../lib/supabase';
+import { supabase, ADMIN_EMAIL } from '../lib/supabase';
 import {
   CallRecord,
   CallRecording,
@@ -1130,20 +1130,82 @@ export class CallingService {
 
   /**
    * Delete personal recording (removes audio file from storage and database)
+   * Strictly enforces user ownership at database and server levels.
+   */
+  /**
+   * Delete personal recording (removes audio file from storage and database)
+   * Strictly enforces user ownership at database and server levels.
    */
   public static async deletePersonalRecording(
     recordingId: string,
-    storagePath: string
+    storagePath: string,
+    expectedUserId?: string
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      // 1. Remove storage object
-      await supabase.storage.from('call-recordings').remove([storagePath]);
+      if (!recordingId) {
+        return { success: false, error: 'Recording ID is required' };
+      }
 
-      // 2. Delete database record
-      const { error: dbError } = await supabase
+      // Verify current authenticated session
+      const { data: { session } } = await supabase.auth.getSession();
+      const currentAuthId = session?.user?.id;
+      if (!currentAuthId) {
+        return { success: false, error: 'Unauthorized: Authentication required' };
+      }
+
+      const isAdminUser = session?.user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+      // Check the recording first from DB to get verified storage_path and owner
+      const { data: existingRec, error: fetchErr } = await supabase
+        .from('call_recordings')
+        .select('id, storage_path, user_id, recording_type')
+        .eq('id', recordingId)
+        .maybeSingle();
+
+      if (fetchErr) {
+        return { success: false, error: `डेटाबेस से रिकॉर्डिंग जाँचने में त्रुटि: ${fetchErr.message}` };
+      }
+
+      if (!existingRec) {
+        // Record is already deleted
+        return { success: true };
+      }
+
+      // Enforce ownership: user can ONLY delete their own personal recording
+      if (existingRec.user_id !== currentAuthId && !isAdminUser) {
+        return { success: false, error: 'Unauthorized: You can only delete your own recordings' };
+      }
+
+      if (expectedUserId && expectedUserId !== currentAuthId && !isAdminUser) {
+        return { success: false, error: 'Unauthorized: User mismatch' };
+      }
+
+      // 1. Remove storage object from bucket 'call-recordings'
+      const pathToUse = existingRec.storage_path || storagePath;
+      if (pathToUse) {
+        try {
+          const { error: storageError } = await supabase.storage
+            .from('call-recordings')
+            .remove([pathToUse]);
+          if (storageError) {
+            console.warn('[CallingService] Storage remove notice:', storageError);
+          }
+        } catch (storageEx) {
+          console.warn('[CallingService] Storage object deletion warning:', storageEx);
+        }
+      }
+
+      // 2. Delete database record with strict user constraint
+      let query = supabase
         .from('call_recordings')
         .delete()
         .eq('id', recordingId);
+
+      if (!isAdminUser) {
+        query = query.eq('user_id', currentAuthId);
+      }
+
+      const { error: dbError } = await query;
 
       if (dbError) {
         return { success: false, error: dbError.message };
@@ -1152,6 +1214,104 @@ export class CallingService {
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'हटाने में त्रुटि' };
+    }
+  }
+
+  /**
+   * Delete All Personal Recordings for a specific user
+   * Batch processes records to ensure large collections are never silently skipped.
+   */
+  public static async deleteAllUserRecordings(
+    userId: string
+  ): Promise<{ success: boolean; deletedCount: number; error?: string }> {
+    try {
+      if (!userId) {
+        return { success: false, deletedCount: 0, error: 'User ID is required' };
+      }
+
+      // Verify authentication
+      const { data: { session } } = await supabase.auth.getSession();
+      const currentAuthId = session?.user?.id;
+      if (!currentAuthId) {
+        return { success: false, deletedCount: 0, error: 'Unauthorized: Authentication required' };
+      }
+
+      const isAdminUser = session?.user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+      if (currentAuthId !== userId && !isAdminUser) {
+        return { success: false, deletedCount: 0, error: 'Unauthorized: Cannot delete other users recordings' };
+      }
+
+      const targetUserId = isAdminUser ? userId : currentAuthId;
+
+      const BATCH_SIZE = 50;
+      let totalDeleted = 0;
+      const dbErrors: string[] = [];
+
+      while (true) {
+        const { data: batch, error: fetchErr } = await supabase
+          .from('call_recordings')
+          .select('id, storage_path, user_id')
+          .eq('user_id', targetUserId)
+          .eq('recording_type', 'personal')
+          .limit(BATCH_SIZE);
+
+        if (fetchErr) {
+          return {
+            success: false,
+            deletedCount: totalDeleted,
+            error: `डेटाबेस से रिकॉर्डिंग्स लोड करने में त्रुटि: ${fetchErr.message}`,
+          };
+        }
+
+        if (!batch || batch.length === 0) {
+          break;
+        }
+
+        // Storage paths strictly belonging to target user
+        const pathsToDelete = batch
+          .map((r) => r.storage_path)
+          .filter((p) => Boolean(p) && (p.startsWith(`user-recordings/${targetUserId}/`) || isAdminUser));
+
+        if (pathsToDelete.length > 0) {
+          try {
+            await supabase.storage.from('call-recordings').remove(pathsToDelete);
+          } catch (storageEx) {
+            console.warn('[CallingService] User bulk storage removal warning:', storageEx);
+          }
+        }
+
+        // Delete database rows in batch
+        const idsToDelete = batch.map((r) => r.id);
+        const { error: dbErr } = await supabase
+          .from('call_recordings')
+          .delete()
+          .in('id', idsToDelete)
+          .eq('user_id', targetUserId);
+
+        if (dbErr) {
+          dbErrors.push(dbErr.message);
+          break;
+        }
+
+        totalDeleted += idsToDelete.length;
+
+        if (batch.length < BATCH_SIZE) {
+          break;
+        }
+      }
+
+      if (dbErrors.length > 0) {
+        return {
+          success: false,
+          deletedCount: totalDeleted,
+          error: dbErrors.join(', '),
+        };
+      }
+
+      return { success: true, deletedCount: totalDeleted };
+    } catch (err: any) {
+      return { success: false, deletedCount: 0, error: err?.message || 'सभी रिकॉर्डिंग्स हटाने में विफल' };
     }
   }
 
@@ -1227,15 +1387,39 @@ export class CallingService {
     callId: string
   ): Promise<{ success: boolean; error?: string }> {
     try {
-      const { data: recordings } = await supabase
+      const { data: { session } } = await supabase.auth.getSession();
+      const isAdminEmail = session?.user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+      if (!isAdminEmail) {
+        let isDbAdmin = false;
+        try {
+          const res = await (supabase.rpc('is_admin') as any);
+          isDbAdmin = Boolean(res?.data);
+        } catch {
+          isDbAdmin = false;
+        }
+        if (!isDbAdmin) {
+          return { success: false, error: 'Unauthorized: Admin privileges required' };
+        }
+      }
+
+      const { data: recordings, error: fetchErr } = await supabase
         .from('call_recordings')
         .select('id, storage_path')
         .eq('call_id', callId);
 
+      if (fetchErr) {
+        return { success: false, error: fetchErr.message };
+      }
+
       const pathsToDelete = (recordings || []).map((r) => r.storage_path).filter(Boolean);
 
       if (pathsToDelete.length > 0) {
-        await supabase.storage.from('call-recordings').remove(pathsToDelete);
+        try {
+          await supabase.storage.from('call-recordings').remove(pathsToDelete);
+        } catch (storageEx) {
+          console.warn('[CallingService] Admin single call storage remove warning:', storageEx);
+        }
       }
 
       const { error } = await supabase
@@ -1250,6 +1434,101 @@ export class CallingService {
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err?.message || 'स्थायी रूप से हटाने में विफल' };
+    }
+  }
+
+  /**
+   * Admin: Permanently delete all recordings in bulk (all or by filter)
+   * Handles pagination/batches so large collections are never silently skipped.
+   */
+  public static async adminDeleteAllRecordings(
+    filterType?: 'all' | 'admin_evidence' | 'personal'
+  ): Promise<{ success: boolean; deletedCount: number; error?: string }> {
+    try {
+      // Authorization verification
+      const { data: { session } } = await supabase.auth.getSession();
+      const isAdminEmail = session?.user?.email?.toLowerCase() === ADMIN_EMAIL.toLowerCase();
+
+      if (!isAdminEmail) {
+        let isDbAdmin = false;
+        try {
+          const res = await (supabase.rpc('is_admin') as any);
+          isDbAdmin = Boolean(res?.data);
+        } catch {
+          isDbAdmin = false;
+        }
+        if (!isDbAdmin) {
+          return { success: false, deletedCount: 0, error: 'Unauthorized: Admin privileges required' };
+        }
+      }
+
+      const BATCH_SIZE = 50;
+      let totalDeleted = 0;
+      const dbErrors: string[] = [];
+
+      while (true) {
+        let query = supabase
+          .from('call_recordings')
+          .select('id, storage_path, recording_type')
+          .limit(BATCH_SIZE);
+
+        if (filterType && filterType !== 'all') {
+          query = query.eq('recording_type', filterType);
+        }
+
+        const { data: batch, error: fetchErr } = await query;
+        if (fetchErr) {
+          return {
+            success: false,
+            deletedCount: totalDeleted,
+            error: `रिकॉर्डिंग्स लोड करने में त्रुटि: ${fetchErr.message}`,
+          };
+        }
+
+        if (!batch || batch.length === 0) {
+          break;
+        }
+
+        // 1. Delete storage files
+        const pathsToDelete = batch.map((r) => r.storage_path).filter(Boolean);
+        if (pathsToDelete.length > 0) {
+          try {
+            await supabase.storage.from('call-recordings').remove(pathsToDelete);
+          } catch (storageEx) {
+            console.warn('[CallingService] Admin bulk storage removal notice:', storageEx);
+          }
+        }
+
+        // 2. Delete database records in batch
+        const idsToDelete = batch.map((r) => r.id);
+        const { error: dbErr } = await supabase
+          .from('call_recordings')
+          .delete()
+          .in('id', idsToDelete);
+
+        if (dbErr) {
+          dbErrors.push(dbErr.message);
+          break;
+        }
+
+        totalDeleted += idsToDelete.length;
+
+        if (batch.length < BATCH_SIZE) {
+          break;
+        }
+      }
+
+      if (dbErrors.length > 0) {
+        return {
+          success: false,
+          deletedCount: totalDeleted,
+          error: dbErrors.join(', '),
+        };
+      }
+
+      return { success: true, deletedCount: totalDeleted };
+    } catch (err: any) {
+      return { success: false, deletedCount: 0, error: err?.message || 'सभी रिकॉर्डिंग्स हटाने में विफल' };
     }
   }
 
